@@ -28,8 +28,20 @@ describe('Story page', () => {
                 expect(body).toContain('Add Story');
         });
 
+        it('serves the submit page with trailing slash', async () => {
+                const response = await SELF.fetch('https://example.com/submit/');
+                const body = await response.text();
+                expect(body).toContain('Add Story');
+        });
+
         it('serves the manage page', async () => {
                 const response = await SELF.fetch('https://example.com/manage');
+                const body = await response.text();
+                expect(body).toContain('Manage Stories');
+        });
+
+        it('serves the manage page with trailing slash', async () => {
+                const response = await SELF.fetch('https://example.com/manage/');
                 const body = await response.text();
                 expect(body).toContain('Manage Stories');
         });
