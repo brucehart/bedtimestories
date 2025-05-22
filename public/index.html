@@ -17,26 +17,51 @@
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script>
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useRef } = React;
 
         function App() {
             const [story, setStory] = useState(null);
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
+            const startY = useRef(null);
+
+            const load = id => {
+                const url = id ? '/stories/' + id : '/stories';
+                return fetch(url)
+                    .then(res => {
+                        if (!res.ok) throw new Error('Failed to load');
+                        return res.json();
+                    });
+            };
+
+            const setAndPush = data => {
+                setStory(data);
+                history.replaceState(null, '', '?id=' + data.id);
+            };
+
+            const loadNext = () => {
+                if (!story) return;
+                setLoading(true);
+                fetch('/stories/' + story.id + '/next')
+                    .then(res => { if (!res.ok) throw new Error('Failed'); return res.json(); })
+                    .then(data => { setAndPush(data); setLoading(false); })
+                    .catch(() => setLoading(false));
+            };
+
+            const loadPrev = () => {
+                if (!story) return;
+                setLoading(true);
+                fetch('/stories/' + story.id + '/prev')
+                    .then(res => { if (!res.ok) throw new Error('Failed'); return res.json(); })
+                    .then(data => { setAndPush(data); setLoading(false); })
+                    .catch(() => setLoading(false));
+            };
 
             useEffect(() => {
                 const params = new URLSearchParams(window.location.search);
                 const id = params.get('id');
-                const url = id ? '/stories/' + id : '/stories';
-                fetch(url)
-                    .then(res => {
-                        if (!res.ok) throw new Error('Failed to load');
-                        return res.json();
-                    })
-                    .then(data => {
-                        setStory(data);
-                        setLoading(false);
-                    })
+                load(id)
+                    .then(data => { setAndPush(data); setLoading(false); })
                     .catch(err => {
                         console.error(err);
                         setError(err);
@@ -44,10 +69,19 @@
                     });
             }, []);
 
+            const onTouchStart = e => { startY.current = e.touches[0].clientY; };
+            const onTouchEnd = e => {
+                if (startY.current === null) return;
+                const diff = e.changedTouches[0].clientY - startY.current;
+                if (diff > 50) loadPrev();
+                else if (diff < -50) loadNext();
+                startY.current = null;
+            };
+
             if (loading) return React.createElement('p', null, 'Loading...');
             if (error || !story) return React.createElement('p', null, 'Story not found.');
 
-            return React.createElement('div', { className: 'story-container' }, [
+            return React.createElement('div', { className: 'story-container', onTouchStart, onTouchEnd }, [
                 React.createElement('h1', { className: 'title', key: 'title' }, story.title),
                 story.image_url ? React.createElement('img', { className: 'story-image', src: "https://pub-dd7bdd98b50f4f72b3e1797a4a2694aa.r2.dev/" + story.image_url, alt: story.title, key: 'image' }) : null,
                 React.createElement('p', { className: 'date', key: 'date' }, new Date(story.date).toLocaleDateString()),
