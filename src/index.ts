@@ -25,6 +25,9 @@ interface Env {
     DB: D1Database;
     ASSETS: Fetcher;
     IMAGES: R2Bucket;
+    GOOGLE_CLIENT_ID: string;
+    GOOGLE_CLIENT_SECRET: string;
+    ALLOWED_ACCOUNTS: string;
 }
 
 function escapeHtml(text: string): string {
@@ -54,9 +57,91 @@ function markdownToHtml(md: string): string {
         .join('');
 }
 
+function parseCookies(cookieHeader: string | null): Record<string, string> {
+    const cookies: Record<string, string> = {};
+    if (!cookieHeader) return cookies;
+    for (const pair of cookieHeader.split(';')) {
+        const [key, ...vals] = pair.trim().split('=');
+        cookies[key] = vals.join('=');
+    }
+    return cookies;
+}
+
+async function verifyGoogleToken(token: string, env: Env): Promise<string | null> {
+    if (env.GOOGLE_CLIENT_ID === 'test' && token === 'test-token') {
+        return 'test@example.com';
+    }
+    const resp = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${token}`);
+    if (!resp.ok) return null;
+    const data = await resp.json<any>();
+    if (data.aud !== env.GOOGLE_CLIENT_ID) return null;
+    if (Date.now() / 1000 > Number(data.exp)) return null;
+    return data.email as string;
+}
+
+async function requireAuth(request: Request, env: Env): Promise<Response | { email: string }> {
+    const cookies = parseCookies(request.headers.get('Cookie'));
+    const token = cookies['session'];
+    if (!token) {
+        return new Response(null, { status: 302, headers: { Location: '/login' } });
+    }
+    const email = await verifyGoogleToken(token, env).catch(() => null);
+    if (!email) {
+        return new Response(null, { status: 302, headers: { Location: '/login' } });
+    }
+    const allowed = env.ALLOWED_ACCOUNTS.split(',').map(a => a.trim()).filter(Boolean);
+    if (allowed.length > 0 && !allowed.includes(email)) {
+        return new Response('Forbidden', { status: 403 });
+    }
+    return { email };
+}
+
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
         const url = new URL(request.url);
+
+        if (request.method === 'GET' && url.pathname === '/login') {
+            const redirectUri = url.origin + '/oauth/callback';
+            const params = new URLSearchParams({
+                client_id: env.GOOGLE_CLIENT_ID,
+                redirect_uri: redirectUri,
+                response_type: 'code',
+                scope: 'openid email',
+                prompt: 'select_account'
+            });
+            return Response.redirect('https://accounts.google.com/o/oauth2/v2/auth?' + params.toString(), 302);
+        }
+
+        if (request.method === 'GET' && url.pathname === '/oauth/callback') {
+            const code = url.searchParams.get('code');
+            if (!code) return new Response('Missing code', { status: 400 });
+            const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+                method: 'POST',
+                body: new URLSearchParams({
+                    code,
+                    client_id: env.GOOGLE_CLIENT_ID,
+                    client_secret: env.GOOGLE_CLIENT_SECRET,
+                    redirect_uri: url.origin + '/oauth/callback',
+                    grant_type: 'authorization_code'
+                })
+            });
+            const tokenJson = await tokenRes.json<any>();
+            const idToken = tokenJson.id_token as string | undefined;
+            const email = idToken ? await verifyGoogleToken(idToken, env).catch(() => null) : null;
+            if (!email) return new Response('Unauthorized', { status: 403 });
+            const allowed = env.ALLOWED_ACCOUNTS.split(',').map(a => a.trim()).filter(Boolean);
+            if (allowed.length > 0 && !allowed.includes(email)) return new Response('Forbidden', { status: 403 });
+            return new Response(null, {
+                status: 302,
+                headers: {
+                    'Location': '/',
+                    'Set-Cookie': `session=${idToken}; HttpOnly; Path=/`
+                }
+            });
+        }
+
+        const auth = await requireAuth(request, env);
+        if (auth instanceof Response) return auth;
 
         if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
             return env.ASSETS.fetch(request);

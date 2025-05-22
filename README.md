@@ -41,6 +41,14 @@ This uses the configuration defined in `wrangler.jsonc` which binds:
 
 Ensure these resources exist in your Cloudflare account before deploying.
 
+### Authentication
+
+Access to the worker is protected using Google OAuth. Define a comma
+separated list of allowed Google accounts in `wrangler.jsonc` under the
+`ALLOWED_ACCOUNTS` variable. The Google OAuth client credentials should
+be stored as secrets named `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+
+
 ## Testing
 
 Unit tests are written with [Vitest](https://vitest.dev/). Run the test suite with:
