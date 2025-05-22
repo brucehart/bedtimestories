@@ -26,8 +26,9 @@
 
             useEffect(() => {
                 const params = new URLSearchParams(window.location.search);
-                const id = params.get('id') || '1';
-                fetch('/stories/' + id)
+                const id = params.get('id');
+                const url = id ? '/stories/' + id : '/stories';
+                fetch(url)
                     .then(res => {
                         if (!res.ok) throw new Error('Failed to load');
                         return res.json();

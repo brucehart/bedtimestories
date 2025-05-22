@@ -67,6 +67,19 @@ export default {
             return env.ASSETS.fetch(assetRequest);
         }
 
+        if (request.method === 'GET' && url.pathname === '/stories') {
+            try {
+                const stmt = env.DB.prepare('SELECT * FROM stories ORDER BY date DESC LIMIT 1');
+                const story = await stmt.first<Story>();
+                if (!story) {
+                    return new Response('Not Found', { status: 404 });
+                }
+                return Response.json(story);
+            } catch (err) {
+                return new Response('Internal Error', { status: 500 });
+            }
+        }
+
         if (request.method === 'GET' && url.pathname.startsWith('/stories/')) {
             const [, , idStr] = url.pathname.split('/');
             const id = Number(idStr);
