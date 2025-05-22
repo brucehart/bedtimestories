@@ -124,11 +124,31 @@ export default {
         }
 
         if (request.method === 'GET' && url.pathname.startsWith('/stories/')) {
-            const [, , idStr] = url.pathname.split('/');
-            const id = Number(idStr);
+            const parts = url.pathname.split('/');
+            const id = Number(parts[2]);
             if (!Number.isInteger(id)) {
                 return new Response('Invalid story id', { status: 400 });
             }
+
+            // /stories/:id/next or /stories/:id/prev
+            if (parts.length === 4 && (parts[3] === 'next' || parts[3] === 'prev')) {
+                try {
+                    const order = parts[3] === 'next' ? 'DESC' : 'ASC';
+                    const cmp = parts[3] === 'next' ? '<' : '>';
+                    const stmt = env.DB.prepare(
+                        `SELECT * FROM stories WHERE date ${cmp} (SELECT date FROM stories WHERE id = ?1) ` +
+                        `ORDER BY date ${order} LIMIT 1`
+                    ).bind(id);
+                    const story = await stmt.first<Story>();
+                    if (!story) {
+                        return new Response('Not Found', { status: 404 });
+                    }
+                    return Response.json(story);
+                } catch {
+                    return new Response('Internal Error', { status: 500 });
+                }
+            }
+
             try {
                 const stmt = env.DB.prepare('SELECT * FROM stories WHERE id = ?1').bind(id);
                 const story = await stmt.first<Story>();
@@ -136,7 +156,7 @@ export default {
                     return new Response('Not Found', { status: 404 });
                 }
                 return Response.json(story);
-            } catch (err) {
+            } catch {
                 return new Response('Internal Error', { status: 500 });
             }
         }
