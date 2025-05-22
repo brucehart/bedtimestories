@@ -168,6 +168,7 @@ export default {
             const data = await request.formData();
             const title = data.get('title');
             const contentMd = data.get('content');
+            const dateStr = data.get('date');
             const imageFile = data.get('image');
 
             if (typeof title !== 'string' || typeof contentMd !== 'string') {
@@ -188,7 +189,7 @@ export default {
             try {
                 const stmt = env.DB.prepare(
                     'INSERT INTO stories (title, content, date, image_url, created, updated) VALUES (?1, ?2, ?3, ?4, datetime(\'now\'), datetime(\'now\'))'
-                ).bind(title, contentHtml, new Date().toISOString(), imageKey);
+                ).bind(title, contentHtml, typeof dateStr === 'string' && dateStr ? new Date(dateStr).toISOString() : new Date().toISOString(), imageKey);
                 const result = await stmt.run();
                 const id = result.meta.last_row_id;
                 return Response.json({ id });
@@ -209,6 +210,7 @@ export default {
             const data = await request.formData();
             const title = data.get('title');
             const contentMd = data.get('content');
+            const dateStr = data.get('date');
             const imageFile = data.get('image');
             if (typeof title !== 'string' || typeof contentMd !== 'string') {
                 return new Response('Invalid form data', { status: 400 });
@@ -226,12 +228,13 @@ export default {
                     if (old?.image_url) await env.IMAGES.delete(old.image_url);
                 }
                 const stmt = env.DB.prepare(
-                    'UPDATE stories SET title = ?1, content = ?2, updated = datetime(\'now\')' + (imageKey !== undefined ? ', image_url = ?3' : '') + ' WHERE id = ?' + (imageKey !== undefined ? '4' : '3')
+                    'UPDATE stories SET title = ?1, content = ?2, date = ?3, updated = datetime(\'now\')' + (imageKey !== undefined ? ', image_url = ?4' : '') + ' WHERE id = ?' + (imageKey !== undefined ? '5' : '4')
                 );
+                const dateIso = typeof dateStr === 'string' && dateStr ? new Date(dateStr).toISOString() : new Date().toISOString();
                 if (imageKey !== undefined) {
-                    await stmt.bind(title, contentHtml, imageKey, id).run();
+                    await stmt.bind(title, contentHtml, dateIso, imageKey, id).run();
                 } else {
-                    await stmt.bind(title, contentHtml, id).run();
+                    await stmt.bind(title, contentHtml, dateIso, id).run();
                 }
                 return new Response('OK');
             } catch {
