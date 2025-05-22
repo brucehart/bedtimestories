@@ -23,11 +23,16 @@ interface Story {
 
 interface Env {
     DB: D1Database;
+    ASSETS: Fetcher;
 }
 
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
         const url = new URL(request.url);
+
+        if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+            return env.ASSETS.fetch(request);
+        }
 
         if (request.method === 'GET' && url.pathname.startsWith('/stories/')) {
             const [, , idStr] = url.pathname.split('/');
