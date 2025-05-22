@@ -74,11 +74,37 @@ export default {
             return env.ASSETS.fetch(assetRequest);
         }
 
+        if (request.method === 'GET' &&
+            (url.pathname === '/edit' || url.pathname === '/edit.html' || url.pathname === '/edit/')) {
+            const assetRequest = new Request(request.url.replace(/\/edit\/?$/, '/edit.html'), request);
+            return env.ASSETS.fetch(assetRequest);
+        }
+
         if (request.method === 'GET' && url.pathname === '/stories/list') {
             try {
-                const stmt = env.DB.prepare('SELECT * FROM stories ORDER BY date DESC');
+                const page = Number(url.searchParams.get('page') || '1');
+                const q = url.searchParams.get('q');
+                const limit = 10;
+                const offset = (page - 1) * limit;
+                let stmt: D1PreparedStatement;
+                let countStmt: D1PreparedStatement;
+                if (q) {
+                    const like = `%${q}%`;
+                    stmt = env.DB.prepare(
+                        'SELECT * FROM stories WHERE title LIKE ?1 OR content LIKE ?1 ORDER BY date DESC LIMIT ?2 OFFSET ?3'
+                    ).bind(like, limit, offset);
+                    countStmt = env.DB.prepare(
+                        'SELECT COUNT(*) as count FROM stories WHERE title LIKE ?1 OR content LIKE ?1'
+                    ).bind(like);
+                } else {
+                    stmt = env.DB.prepare(
+                        'SELECT * FROM stories ORDER BY date DESC LIMIT ?1 OFFSET ?2'
+                    ).bind(limit, offset);
+                    countStmt = env.DB.prepare('SELECT COUNT(*) as count FROM stories');
+                }
                 const { results } = await stmt.all<Story>();
-                return Response.json(results);
+                const count = (await countStmt.first<{ count: number }>())?.count || 0;
+                return Response.json({ stories: results, total: count });
             } catch {
                 return new Response('Internal Error', { status: 500 });
             }
