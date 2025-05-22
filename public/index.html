@@ -50,7 +50,11 @@
                 React.createElement('h1', { className: 'title', key: 'title' }, story.title),
                 story.image_url ? React.createElement('img', { className: 'story-image', src: story.image_url, alt: story.title, key: 'image' }) : null,
                 React.createElement('p', { className: 'date', key: 'date' }, new Date(story.date).toLocaleDateString()),
-                React.createElement('div', { className: 'content', key: 'content' }, story.content)
+                React.createElement('div', {
+                    className: 'content',
+                    key: 'content',
+                    dangerouslySetInnerHTML: { __html: story.content }
+                })
             ]);
         }
 
