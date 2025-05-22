@@ -23,11 +23,15 @@
 	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
 	 */
 
-	"d1_databases": [{
-		"binding": "DB",
-		"database_name": "bedtime-stories",
-		"database_id": "6e61a56c-ae60-4df2-813b-0906401ecd7d"
- 	}],
+        "d1_databases": [{
+                "binding": "DB",
+                "database_name": "bedtime-stories",
+                "database_id": "6e61a56c-ae60-4df2-813b-0906401ecd7d"
+        }],
+       "r2_buckets": [{
+               "binding": "IMAGES",
+               "bucket_name": "pub-dd7bdd98b50f4f72b3e1797a4a2694aa"
+       }],
 
 	/**
 	 * Environment Variables

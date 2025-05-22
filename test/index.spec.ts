@@ -21,4 +21,10 @@ describe('Story page', () => {
                 const body = await response.text();
                 expect(body).toContain('<div id="root"></div>');
         });
+
+        it('serves the submit page', async () => {
+                const response = await SELF.fetch('https://example.com/submit');
+                const body = await response.text();
+                expect(body).toContain('Add Story');
+        });
 });
