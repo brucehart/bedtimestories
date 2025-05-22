@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Edit Story</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 1rem; line-height: 1.6; }
+        form { max-width: 600px; margin: 0 auto; display: flex; flex-direction: column; gap: 0.5rem; }
+        textarea { width: 100%; font-family: inherit; }
+        img { max-width: 100%; border-radius: 8px; }
+        .drop-zone { padding: 1rem; border: 2px dashed #ccc; text-align: center; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script>
+        const { useState, useEffect, useRef } = React;
+        function App() {
+            const params = new URLSearchParams(window.location.search);
+            const id = params.get('id');
+            const [title, setTitle] = useState('');
+            const [content, setContent] = useState('');
+            const [imageFile, setImageFile] = useState(null);
+            const [preview, setPreview] = useState(null);
+            const fileInput = useRef(null);
+
+            useEffect(() => {
+                fetch('/stories/' + id)
+                    .then(res => res.json())
+                    .then(data => {
+                        setTitle(data.title);
+                        const div = document.createElement('div');
+                        div.innerHTML = data.content;
+                        setContent(div.innerText);
+                        setPreview(data.image_url ? 'https://pub-dd7bdd98b50f4f72b3e1797a4a2694aa.r2.dev/' + data.image_url : null);
+                    });
+            }, [id]);
+
+            const handleFile = file => {
+                if (file) {
+                    setImageFile(file);
+                    setPreview(URL.createObjectURL(file));
+                }
+            };
+
+            const onPaste = e => {
+                const file = e.clipboardData.files && e.clipboardData.files[0];
+                handleFile(file);
+            };
+
+            const onDrop = e => {
+                e.preventDefault();
+                handleFile(e.dataTransfer.files[0]);
+            };
+
+            const onDragOver = e => e.preventDefault();
+
+            const submit = async e => {
+                e.preventDefault();
+                const fd = new FormData();
+                fd.append('title', title);
+                fd.append('content', content);
+                if (imageFile) fd.append('image', imageFile, imageFile.name);
+                const res = await fetch('/stories/' + id, { method: 'PUT', body: fd });
+                if (res.ok) {
+                    alert('Story saved');
+                    window.location.href = '/manage.html';
+                } else {
+                    alert('Failed to save');
+                }
+            };
+
+            return React.createElement('form', { onSubmit: submit, onPaste, onDrop, onDragOver }, [
+                React.createElement('h1', { key: 'h' }, 'Edit Story'),
+                React.createElement('input', { key: 't', type: 'text', placeholder: 'Title', value: title, required: true, onChange: e => setTitle(e.target.value) }),
+                React.createElement('textarea', { key: 'c', rows: 10, placeholder: 'Story in Markdown', value: content, required: true, onChange: e => setContent(e.target.value) }),
+                React.createElement('div', { key: 'dz', className: 'drop-zone', onClick: () => fileInput.current && fileInput.current.click() }, imageFile ? 'Change image' : 'Click, paste or drop image here'),
+                React.createElement('input', { key: 'f', type: 'file', accept: 'image/*', style: { display: 'none' }, ref: fileInput, onChange: e => handleFile(e.target.files[0]) }),
+                preview ? React.createElement('img', { key: 'p', src: preview }) : null,
+                React.createElement('button', { key: 'b', type: 'submit' }, 'Save')
+            ]);
+        }
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
+    </script>
+</body>
+</html>
