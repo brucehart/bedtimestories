@@ -8,7 +8,11 @@
         body { font-family: Arial, sans-serif; margin: 0; padding: 1rem; line-height: 1.6; }
         .story-container { max-width: 600px; margin: 0 auto; }
         .story-image { width: 100%; height: auto; border-radius: 8px; }
+        .title-wrapper { display: flex; align-items: center; gap: 0.25rem; }
         .title { font-size: 2em; margin-bottom: 0.5em; }
+        .nav-buttons { display: flex; flex-direction: column; }
+        .nav-buttons button { background: none; border: none; cursor: pointer; font-size: 1.5rem; line-height: 1; }
+        .nav-buttons button:disabled { color: #ccc; cursor: default; }
         .date { color: #666; margin-bottom: 1em; }
     </style>
 </head>
@@ -23,7 +27,15 @@
             const [story, setStory] = useState(null);
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
+            const [nextStory, setNextStory] = useState(null);
+            const [prevStory, setPrevStory] = useState(null);
             const startY = useRef(null);
+            const updateNeighbors = id => {
+                Promise.all([
+                    fetch("/stories/" + id + "/prev").then(res => res.ok ? res.json() : null).catch(() => null),
+                    fetch("/stories/" + id + "/next").then(res => res.ok ? res.json() : null).catch(() => null)
+                ]).then(([prev, next]) => { setPrevStory(prev); setNextStory(next); });
+            };
 
             const load = id => {
                 const url = id ? '/stories/' + id : '/stories';
@@ -37,24 +49,17 @@
             const setAndPush = data => {
                 setStory(data);
                 history.replaceState(null, '', '?id=' + data.id);
+                updateNeighbors(data.id);
             };
 
             const loadNext = () => {
-                if (!story) return;
-                setLoading(true);
-                fetch('/stories/' + story.id + '/next')
-                    .then(res => { if (!res.ok) throw new Error('Failed'); return res.json(); })
-                    .then(data => { setAndPush(data); setLoading(false); })
-                    .catch(() => setLoading(false));
+                if (!nextStory) return;
+                setAndPush(nextStory);
             };
 
             const loadPrev = () => {
-                if (!story) return;
-                setLoading(true);
-                fetch('/stories/' + story.id + '/prev')
-                    .then(res => { if (!res.ok) throw new Error('Failed'); return res.json(); })
-                    .then(data => { setAndPush(data); setLoading(false); })
-                    .catch(() => setLoading(false));
+                if (!prevStory) return;
+                setAndPush(prevStory);
             };
 
             useEffect(() => {
@@ -82,7 +87,7 @@
             if (error || !story) return React.createElement('p', null, 'Story not found.');
 
             return React.createElement('div', { className: 'story-container', onTouchStart, onTouchEnd }, [
-                React.createElement('h1', { className: 'title', key: 'title' }, story.title),
+                React.createElement('div', { className: 'title-wrapper', key: 'title-wrap' }, [                    React.createElement('h1', { className: 'title', key: 'title' }, story.title),                    React.createElement('div', { className: 'nav-buttons', key: 'nav' }, [                        React.createElement('button', { key: 'up', onClick: loadPrev, disabled: !prevStory }, '▲'),                        React.createElement('button', { key: 'down', onClick: loadNext, disabled: !nextStory }, '▼')                    ])                ]),
                 story.image_url ? React.createElement('img', { className: 'story-image', src: "https://pub-dd7bdd98b50f4f72b3e1797a4a2694aa.r2.dev/" + story.image_url, alt: story.title, key: 'image' }) : null,
                 React.createElement('p', { className: 'date', key: 'date' }, new Date(story.date).toLocaleDateString()),
                 React.createElement('div', {
