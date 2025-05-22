@@ -77,8 +77,8 @@ export default {
         if (request.method === 'GET' && url.pathname === '/stories/list') {
             try {
                 const stmt = env.DB.prepare('SELECT * FROM stories ORDER BY date DESC');
-                const stories = await stmt.all<Story>();
-                return Response.json(stories);
+                const { results } = await stmt.all<Story>();
+                return Response.json(results);
             } catch {
                 return new Response('Internal Error', { status: 500 });
             }
