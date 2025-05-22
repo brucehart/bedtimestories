@@ -20,7 +20,7 @@ npm install
 Start a local development server using Wrangler:
 
 ```bash
-npm run dev
+wrangler dev
 ```
 
 The application will be available at `http://localhost:8787`.
@@ -30,7 +30,7 @@ The application will be available at `http://localhost:8787`.
 Deploy the worker to Cloudflare with:
 
 ```bash
-npm run deploy
+wrangler deploy
 ```
 
 This uses the configuration defined in `wrangler.jsonc` which binds:
@@ -49,14 +49,6 @@ separated list of allowed Google accounts in `wrangler.jsonc` under the
 be stored as secrets named `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 
 
-## Testing
-
-Unit tests are written with [Vitest](https://vitest.dev/). Run the test suite with:
-
-```bash
-npm test
-```
-
 ## API Summary
 
 The worker exposes the following endpoints:
@@ -73,4 +65,16 @@ The worker exposes the following endpoints:
 
 ## License
 
-This project is provided without a specific license.
+This project is licensed under the [MIT License](LICENSE).
+
+```
+MIT License
+
+Copyright (c) 2024 Bruce J. Hart
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished
