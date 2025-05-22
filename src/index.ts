@@ -67,6 +67,21 @@ export default {
             return env.ASSETS.fetch(assetRequest);
         }
 
+        if (request.method === 'GET' && (url.pathname === '/manage' || url.pathname === '/manage.html')) {
+            const assetRequest = new Request(request.url.replace(/\/manage$/, '/manage.html'), request);
+            return env.ASSETS.fetch(assetRequest);
+        }
+
+        if (request.method === 'GET' && url.pathname === '/stories/list') {
+            try {
+                const stmt = env.DB.prepare('SELECT * FROM stories ORDER BY date DESC');
+                const stories = await stmt.all<Story>();
+                return Response.json(stories);
+            } catch {
+                return new Response('Internal Error', { status: 500 });
+            }
+        }
+
         if (request.method === 'GET' && url.pathname === '/stories') {
             try {
                 const stmt = env.DB.prepare('SELECT * FROM stories ORDER BY date DESC LIMIT 1');
@@ -75,7 +90,7 @@ export default {
                     return new Response('Not Found', { status: 404 });
                 }
                 return Response.json(story);
-            } catch (err) {
+            } catch {
                 return new Response('Internal Error', { status: 500 });
             }
         }
@@ -130,6 +145,64 @@ export default {
                 const id = result.meta.last_row_id;
                 return Response.json({ id });
             } catch (err) {
+                return new Response('Internal Error', { status: 500 });
+            }
+        }
+
+        if (request.method === 'PUT' && url.pathname.startsWith('/stories/')) {
+            const [, , idStr] = url.pathname.split('/');
+            const id = Number(idStr);
+            if (!Number.isInteger(id)) {
+                return new Response('Invalid story id', { status: 400 });
+            }
+            if (!request.headers.get('content-type')?.includes('multipart/form-data')) {
+                return new Response('Expected multipart/form-data', { status: 400 });
+            }
+            const data = await request.formData();
+            const title = data.get('title');
+            const contentMd = data.get('content');
+            const imageFile = data.get('image');
+            if (typeof title !== 'string' || typeof contentMd !== 'string') {
+                return new Response('Invalid form data', { status: 400 });
+            }
+            const contentHtml = markdownToHtml(contentMd);
+            let imageKey: string | undefined;
+            try {
+                const old = await env.DB.prepare('SELECT image_url FROM stories WHERE id = ?1').bind(id).first<{ image_url: string | null }>();
+                if (imageFile instanceof File) {
+                    const arrayBuffer = await imageFile.arrayBuffer();
+                    const parts = imageFile.name.split('.');
+                    const ext = parts.length > 1 ? '.' + parts.pop() : '';
+                    imageKey = crypto.randomUUID() + ext;
+                    await env.IMAGES.put(imageKey, arrayBuffer);
+                    if (old?.image_url) await env.IMAGES.delete(old.image_url);
+                }
+                const stmt = env.DB.prepare(
+                    'UPDATE stories SET title = ?1, content = ?2, updated = datetime(\'now\')' + (imageKey !== undefined ? ', image_url = ?3' : '') + ' WHERE id = ?' + (imageKey !== undefined ? '4' : '3')
+                );
+                if (imageKey !== undefined) {
+                    await stmt.bind(title, contentHtml, imageKey, id).run();
+                } else {
+                    await stmt.bind(title, contentHtml, id).run();
+                }
+                return new Response('OK');
+            } catch {
+                return new Response('Internal Error', { status: 500 });
+            }
+        }
+
+        if (request.method === 'DELETE' && url.pathname.startsWith('/stories/')) {
+            const [, , idStr] = url.pathname.split('/');
+            const id = Number(idStr);
+            if (!Number.isInteger(id)) {
+                return new Response('Invalid story id', { status: 400 });
+            }
+            try {
+                const story = await env.DB.prepare('SELECT image_url FROM stories WHERE id = ?1').bind(id).first<{ image_url: string | null }>();
+                await env.DB.prepare('DELETE FROM stories WHERE id = ?1').bind(id).run();
+                if (story?.image_url) await env.IMAGES.delete(story.image_url);
+                return new Response('OK');
+            } catch {
                 return new Response('Internal Error', { status: 500 });
             }
         }
