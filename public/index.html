@@ -21,7 +21,7 @@
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script>
-        const { useState, useEffect, useRef } = React;
+        const { useState, useEffect } = React;
 
         async function authFetch(url, options) {
             try {
@@ -47,7 +47,6 @@
             const [error, setError] = useState(null);
             const [nextStory, setNextStory] = useState(null);
             const [prevStory, setPrevStory] = useState(null);
-            const startY = useRef(null);
             const updateNeighbors = id => {
                 Promise.all([
                     authFetch("/stories/" + id + "/prev").then(res => res.ok ? res.json() : null).catch(() => null),
@@ -92,19 +91,11 @@
                     });
             }, []);
 
-            const onTouchStart = e => { startY.current = e.touches[0].clientY; };
-            const onTouchEnd = e => {
-                if (startY.current === null) return;
-                const diff = e.changedTouches[0].clientY - startY.current;
-                if (diff > 50) loadPrev();
-                else if (diff < -50) loadNext();
-                startY.current = null;
-            };
 
             if (loading) return React.createElement('p', null, 'Loading...');
             if (error || !story) return React.createElement('p', null, 'Story not found.');
 
-            return React.createElement('div', { className: 'story-container', onTouchStart, onTouchEnd }, [
+            return React.createElement('div', { className: 'story-container' }, [
                 React.createElement('div', { className: 'title-wrapper', key: 'title-wrap' }, [                    React.createElement('h1', { className: 'title', key: 'title' }, story.title),                    React.createElement('div', { className: 'nav-buttons', key: 'nav' }, [                        React.createElement('button', { key: 'up', onClick: loadPrev, disabled: !prevStory }, '▲'),                        React.createElement('button', { key: 'down', onClick: loadNext, disabled: !nextStory }, '▼')                    ])                ]),
                 story.image_url ? React.createElement('img', { className: 'story-image', src: "https://pub-dd7bdd98b50f4f72b3e1797a4a2694aa.r2.dev/" + story.image_url, alt: story.title, key: 'image' }) : null,
                 //React.createElement('p', { className: 'date', key: 'date' }, new Date(story.date).toLocaleDateString()),
