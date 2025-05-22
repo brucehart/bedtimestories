@@ -30,7 +30,7 @@
         }],
        "r2_buckets": [{
                "binding": "IMAGES",
-               "bucket_name": "pub-dd7bdd98b50f4f72b3e1797a4a2694aa"
+               "bucket_name": "story-images"
        }],
 
 	/**
