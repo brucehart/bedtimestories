@@ -27,4 +27,10 @@ describe('Story page', () => {
                 const body = await response.text();
                 expect(body).toContain('Add Story');
         });
+
+        it('serves the manage page', async () => {
+                const response = await SELF.fetch('https://example.com/manage');
+                const body = await response.text();
+                expect(body).toContain('Manage Stories');
+        });
 });

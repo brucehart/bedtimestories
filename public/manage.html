@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Manage Stories</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 1rem; line-height: 1.6; }
+        form { max-width: 600px; margin: 1rem auto; display: flex; flex-direction: column; gap: 0.5rem; }
+        textarea { width: 100%; font-family: inherit; }
+        img { max-width: 100%; border-radius: 8px; }
+        .drop-zone { padding: 1rem; border: 2px dashed #ccc; text-align: center; cursor: pointer; }
+        .story-list { max-width: 600px; margin: 0 auto; }
+        .story-item { display: flex; justify-content: space-between; margin-bottom: 0.5rem; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script>
+        const { useState, useEffect, useRef } = React;
+        function App() {
+            const [stories, setStories] = useState([]);
+            const [editing, setEditing] = useState(null);
+            const [title, setTitle] = useState('');
+            const [content, setContent] = useState('');
+            const [imageFile, setImageFile] = useState(null);
+            const [preview, setPreview] = useState(null);
+            const fileInput = useRef(null);
+
+            const load = () => {
+                fetch('/stories/list')
+                    .then(res => res.json())
+                    .then(data => setStories(data));
+            };
+
+            useEffect(load, []);
+
+            const handleFile = file => {
+                if (file) {
+                    setImageFile(file);
+                    setPreview(URL.createObjectURL(file));
+                }
+            };
+
+            const startEdit = story => {
+                setEditing(story);
+                setTitle(story.title);
+                const div = document.createElement('div');
+                div.innerHTML = story.content;
+                setContent(div.innerText);
+                setPreview(story.image_url ? 'https://pub-dd7bdd98b50f4f72b3e1797a4a2694aa.r2.dev/' + story.image_url : null);
+                if (fileInput.current) fileInput.current.value = '';
+                setImageFile(null);
+            };
+
+            const cancelEdit = () => {
+                setEditing(null);
+                setTitle('');
+                setContent('');
+                setImageFile(null);
+                setPreview(null);
+                if (fileInput.current) fileInput.current.value = '';
+            };
+
+            const onPaste = e => {
+                const file = e.clipboardData.files && e.clipboardData.files[0];
+                handleFile(file);
+            };
+
+            const onDrop = e => {
+                e.preventDefault();
+                handleFile(e.dataTransfer.files[0]);
+            };
+
+            const onDragOver = e => e.preventDefault();
+
+            const submit = async e => {
+                e.preventDefault();
+                const fd = new FormData();
+                fd.append('title', title);
+                fd.append('content', content);
+                if (imageFile) fd.append('image', imageFile, imageFile.name);
+                const url = editing ? '/stories/' + editing.id : '/stories';
+                const method = editing ? 'PUT' : 'POST';
+                const res = await fetch(url, { method, body: fd });
+                if (res.ok) {
+                    alert('Story saved');
+                    cancelEdit();
+                    load();
+                } else {
+                    alert('Failed to save');
+                }
+            };
+
+            const remove = async id => {
+                if (!confirm('Delete this story?')) return;
+                const res = await fetch('/stories/' + id, { method: 'DELETE' });
+                if (res.ok) {
+                    load();
+                } else {
+                    alert('Failed to delete');
+                }
+            };
+
+            return React.createElement(React.Fragment, null, [
+                React.createElement('div', { key: 'list', className: 'story-list' }, stories.map(s =>
+                    React.createElement('div', { key: s.id, className: 'story-item' }, [
+                        React.createElement('span', { key: 't' + s.id }, s.title),
+                        React.createElement('span', { key: 'a' + s.id }, [
+                            React.createElement('button', { key: 'e', onClick: () => startEdit(s) }, 'Edit'),
+                            React.createElement('button', { key: 'd', onClick: () => remove(s.id) }, 'Delete')
+                        ])
+                    ])
+                )),
+                React.createElement('form', { key: 'form', onSubmit: submit, onPaste, onDrop, onDragOver }, [
+                    React.createElement('h1', { key: 'h' }, editing ? 'Edit Story' : 'Add Story'),
+                    React.createElement('input', { key: 't', type: 'text', placeholder: 'Title', value: title, required: true, onChange: e => setTitle(e.target.value) }),
+                    React.createElement('textarea', { key: 'c', rows: 10, placeholder: 'Story in Markdown', value: content, required: true, onChange: e => setContent(e.target.value) }),
+                    React.createElement('div', { key: 'dz', className: 'drop-zone', onClick: () => fileInput.current && fileInput.current.click() }, imageFile ? 'Change image' : 'Click, paste or drop image here'),
+                    React.createElement('input', { key: 'f', type: 'file', accept: 'image/*', style: { display: 'none' }, ref: fileInput, onChange: e => handleFile(e.target.files[0]) }),
+                    preview ? React.createElement('img', { key: 'p', src: preview }) : null,
+                    React.createElement('div', { key: 'buttons' }, [
+                        React.createElement('button', { key: 'submit', type: 'submit' }, editing ? 'Save' : 'Submit'),
+                        editing ? React.createElement('button', { key: 'cancel', type: 'button', onClick: cancelEdit }, 'Cancel') : null
+                    ])
+                ])
+            ]);
+        }
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
+    </script>
+</body>
+</html>
