@@ -6,9 +6,13 @@
     <title>Manage Stories</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 1rem; line-height: 1.6; }
+        h1 { text-align: center; }
         .story-list { max-width: 600px; margin: 1rem auto; }
         .story-item { display: flex; justify-content: space-between; margin-bottom: 0.5rem; }
         .pagination { display: flex; justify-content: center; gap: 0.5rem; margin-top: 1rem; }
+        .search-wrapper { position: relative; max-width: 300px; margin: 0 auto 1rem; }
+        .search-wrapper input { width: 100%; padding-left: 1.5rem; box-sizing: border-box; }
+        .search-wrapper .icon { position: absolute; left: 0.25rem; top: 50%; transform: translateY(-50%); pointer-events: none; }
     </style>
 </head>
 <body>
@@ -55,11 +59,15 @@
 
             return React.createElement(React.Fragment, null, [
                 React.createElement('h1', { key: 'h' }, 'Manage Stories'),
-                React.createElement('input', { key: 's', type: 'text', placeholder: 'Search', value: q, onChange: onSearch }),
+                React.createElement('div', { key: 'search', className: 'search-wrapper' }, [
+                    React.createElement('span', { key: 'i', className: 'icon' }, '🔍'),
+                    React.createElement('input', { key: 's', type: 'text', placeholder: 'Search', value: q, onChange: onSearch })
+                ]),
                 React.createElement('div', { key: 'list', className: 'story-list' }, stories.map(s =>
                     React.createElement('div', { key: s.id, className: 'story-item' }, [
                         React.createElement('span', { key: 't' + s.id }, s.title),
                         React.createElement('span', { key: 'a' + s.id }, [
+                            React.createElement('button', { key: 'v', onClick: () => window.location.href = '/?id=' + s.id }, 'View'),
                             React.createElement('button', { key: 'e', onClick: () => window.location.href = '/edit.html?id=' + s.id }, 'Edit'),
                             React.createElement('button', { key: 'd', onClick: () => remove(s.id) }, 'Delete')
                         ])
