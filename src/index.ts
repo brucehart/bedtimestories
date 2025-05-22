@@ -62,13 +62,15 @@ export default {
             return env.ASSETS.fetch(request);
         }
 
-        if (request.method === 'GET' && (url.pathname === '/submit' || url.pathname === '/submit.html')) {
-            const assetRequest = new Request(request.url.replace(/\/submit$/, '/submit.html'), request);
+        if (request.method === 'GET' &&
+            (url.pathname === '/submit' || url.pathname === '/submit.html' || url.pathname === '/submit/')) {
+            const assetRequest = new Request(request.url.replace(/\/submit\/?$/, '/submit.html'), request);
             return env.ASSETS.fetch(assetRequest);
         }
 
-        if (request.method === 'GET' && (url.pathname === '/manage' || url.pathname === '/manage.html')) {
-            const assetRequest = new Request(request.url.replace(/\/manage$/, '/manage.html'), request);
+        if (request.method === 'GET' &&
+            (url.pathname === '/manage' || url.pathname === '/manage.html' || url.pathname === '/manage/')) {
+            const assetRequest = new Request(request.url.replace(/\/manage\/?$/, '/manage.html'), request);
             return env.ASSETS.fetch(assetRequest);
         }
 
