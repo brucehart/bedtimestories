@@ -59,8 +59,8 @@ The worker exposes the following endpoints:
 - `GET /stories/list` – returns all stories in JSON
 - `GET /stories` – returns the most recent story
 - `GET /stories/:id` – returns a single story
-- `POST /stories` – create a new story (multipart form data)
-- `PUT /stories/:id` – update an existing story (multipart form data)
+- `POST /stories` – create a new story (multipart form data, fields: `title`, `content`, `date`, optional `image`)
+- `PUT /stories/:id` – update an existing story (multipart form data, fields: `title`, `content`, `date`, optional `image`)
 - `DELETE /stories/:id` – remove a story
 
 ## License
