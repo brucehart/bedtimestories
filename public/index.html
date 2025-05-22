@@ -23,6 +23,24 @@
     <script>
         const { useState, useEffect, useRef } = React;
 
+        async function authFetch(url, options) {
+            try {
+                const res = await fetch(url, options);
+                if (res.redirected && new URL(res.url).pathname === '/login') {
+                    window.location.href = '/login';
+                    throw new Error('Redirecting to login');
+                }
+                if (res.status === 401 || res.status === 403) {
+                    window.location.href = '/login';
+                    throw new Error('Unauthorized');
+                }
+                return res;
+            } catch (err) {
+                window.location.href = '/login';
+                throw err;
+            }
+        }
+
         function App() {
             const [story, setStory] = useState(null);
             const [loading, setLoading] = useState(true);
@@ -32,14 +50,14 @@
             const startY = useRef(null);
             const updateNeighbors = id => {
                 Promise.all([
-                    fetch("/stories/" + id + "/prev").then(res => res.ok ? res.json() : null).catch(() => null),
-                    fetch("/stories/" + id + "/next").then(res => res.ok ? res.json() : null).catch(() => null)
+                    authFetch("/stories/" + id + "/prev").then(res => res.ok ? res.json() : null).catch(() => null),
+                    authFetch("/stories/" + id + "/next").then(res => res.ok ? res.json() : null).catch(() => null)
                 ]).then(([prev, next]) => { setPrevStory(prev); setNextStory(next); });
             };
 
             const load = id => {
                 const url = id ? '/stories/' + id : '/stories';
-                return fetch(url)
+                return authFetch(url)
                     .then(res => {
                         if (!res.ok) throw new Error('Failed to load');
                         return res.json();

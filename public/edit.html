@@ -18,6 +18,24 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script>
         const { useState, useEffect, useRef } = React;
+
+        async function authFetch(url, options) {
+            try {
+                const res = await fetch(url, options);
+                if (res.redirected && new URL(res.url).pathname === '/login') {
+                    window.location.href = '/login';
+                    throw new Error('Redirecting to login');
+                }
+                if (res.status === 401 || res.status === 403) {
+                    window.location.href = '/login';
+                    throw new Error('Unauthorized');
+                }
+                return res;
+            } catch (err) {
+                window.location.href = '/login';
+                throw err;
+            }
+        }
         function App() {
             const params = new URLSearchParams(window.location.search);
             const id = params.get('id');
@@ -29,7 +47,7 @@
             const fileInput = useRef(null);
 
             useEffect(() => {
-                fetch('/stories/' + id)
+                authFetch('/stories/' + id)
                     .then(res => res.json())
                     .then(data => {
                         setTitle(data.title);
@@ -67,7 +85,7 @@
                 fd.append('content', content);
                 fd.append('date', date);
                 if (imageFile) fd.append('image', imageFile, imageFile.name);
-                const res = await fetch('/stories/' + id, { method: 'PUT', body: fd });
+                const res = await authFetch('/stories/' + id, { method: 'PUT', body: fd });
                 if (res.ok) {
                     alert('Story saved');
                     window.location.href = '/manage.html';

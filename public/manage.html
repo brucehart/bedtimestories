@@ -21,6 +21,24 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script>
         const { useState, useEffect } = React;
+
+        async function authFetch(url, options) {
+            try {
+                const res = await fetch(url, options);
+                if (res.redirected && new URL(res.url).pathname === '/login') {
+                    window.location.href = '/login';
+                    throw new Error('Redirecting to login');
+                }
+                if (res.status === 401 || res.status === 403) {
+                    window.location.href = '/login';
+                    throw new Error('Unauthorized');
+                }
+                return res;
+            } catch (err) {
+                window.location.href = '/login';
+                throw err;
+            }
+        }
         function App() {
             const [stories, setStories] = useState([]);
             const [page, setPage] = useState(1);
@@ -28,7 +46,7 @@
             const [q, setQ] = useState('');
 
             const load = (p = page, search = q) => {
-                fetch(`/stories/list?page=${p}&q=${encodeURIComponent(search)}`)
+                authFetch(`/stories/list?page=${p}&q=${encodeURIComponent(search)}`)
                     .then(res => res.json())
                     .then(data => {
                         setStories(data.stories);
@@ -41,7 +59,7 @@
 
             const remove = async id => {
                 if (!confirm('Are You Sure?')) return;
-                const res = await fetch('/stories/' + id, { method: 'DELETE' });
+                const res = await authFetch('/stories/' + id, { method: 'DELETE' });
                 if (res.ok) {
                     load(page, q);
                 } else {

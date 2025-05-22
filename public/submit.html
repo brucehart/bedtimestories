@@ -18,6 +18,24 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script>
         const { useState, useRef } = React;
+
+        async function authFetch(url, options) {
+            try {
+                const res = await fetch(url, options);
+                if (res.redirected && new URL(res.url).pathname === '/login') {
+                    window.location.href = '/login';
+                    throw new Error('Redirecting to login');
+                }
+                if (res.status === 401 || res.status === 403) {
+                    window.location.href = '/login';
+                    throw new Error('Unauthorized');
+                }
+                return res;
+            } catch (err) {
+                window.location.href = '/login';
+                throw err;
+            }
+        }
         function App() {
             const [title, setTitle] = useState('');
             const [content, setContent] = useState('');
@@ -52,7 +70,7 @@
                 fd.append('content', content);
                 fd.append('date', date);
                 if (imageFile) fd.append('image', imageFile, imageFile.name);
-                const res = await fetch('/stories', { method: 'POST', body: fd });
+                const res = await authFetch('/stories', { method: 'POST', body: fd });
                 if (res.ok) {
                     alert('Story saved');
                     setTitle('');
