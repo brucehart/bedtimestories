@@ -91,14 +91,14 @@ export default {
                 if (q) {
                     const like = `%${q}%`;
                     stmt = env.DB.prepare(
-                        'SELECT * FROM stories WHERE title LIKE ?1 OR content LIKE ?1 ORDER BY date DESC LIMIT ?2 OFFSET ?3'
+                        'SELECT * FROM stories WHERE title LIKE ?1 OR content LIKE ?1 ORDER BY date DESC, id DESC LIMIT ?2 OFFSET ?3'
                     ).bind(like, limit, offset);
                     countStmt = env.DB.prepare(
                         'SELECT COUNT(*) as count FROM stories WHERE title LIKE ?1 OR content LIKE ?1'
                     ).bind(like);
                 } else {
                     stmt = env.DB.prepare(
-                        'SELECT * FROM stories ORDER BY date DESC LIMIT ?1 OFFSET ?2'
+                        'SELECT * FROM stories ORDER BY date DESC, id DESC LIMIT ?1 OFFSET ?2'
                     ).bind(limit, offset);
                     countStmt = env.DB.prepare('SELECT COUNT(*) as count FROM stories');
                 }
@@ -112,7 +112,7 @@ export default {
 
         if (request.method === 'GET' && url.pathname === '/stories') {
             try {
-                const stmt = env.DB.prepare('SELECT * FROM stories ORDER BY date DESC LIMIT 1');
+                const stmt = env.DB.prepare('SELECT * FROM stories ORDER BY date DESC, id DESC LIMIT 1');
                 const story = await stmt.first<Story>();
                 if (!story) {
                     return new Response('Not Found', { status: 404 });
@@ -136,8 +136,9 @@ export default {
                     const order = parts[3] === 'next' ? 'DESC' : 'ASC';
                     const cmp = parts[3] === 'next' ? '<' : '>';
                     const stmt = env.DB.prepare(
-                        `SELECT * FROM stories WHERE date ${cmp} (SELECT date FROM stories WHERE id = ?1) ` +
-                        `ORDER BY date ${order} LIMIT 1`
+                        `SELECT * FROM stories WHERE (date ${cmp} (SELECT date FROM stories WHERE id = ?1)` +
+                        ` OR (date = (SELECT date FROM stories WHERE id = ?1) AND id ${cmp} ?1)) ` +
+                        `ORDER BY date ${order}, id ${order} LIMIT 1`
                     ).bind(id);
                     const story = await stmt.first<Story>();
                     if (!story) {
