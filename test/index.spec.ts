@@ -42,11 +42,13 @@ describe('Story page', () => {
                 const response = await SELF.fetch(new Request('https://example.com/manage', { headers: { cookie: 'session=test-token' } }));
                 const body = await response.text();
                 expect(body).toContain('Manage Stories');
+                expect(body).toContain('Submit New Story');
         });
 
         it('serves the manage page with trailing slash', async () => {
                 const response = await SELF.fetch(new Request('https://example.com/manage/', { headers: { cookie: 'session=test-token' } }));
                 const body = await response.text();
                 expect(body).toContain('Manage Stories');
+                expect(body).toContain('Submit New Story');
         });
 });
