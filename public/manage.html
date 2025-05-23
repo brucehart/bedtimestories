@@ -13,6 +13,7 @@
         .search-wrapper { position: relative; max-width: 300px; margin: 0 auto 1rem; }
         .search-wrapper input { width: 100%; padding-left: 1.5rem; box-sizing: border-box; }
         .search-wrapper .icon { position: absolute; left: 0.25rem; top: 50%; transform: translateY(-50%); pointer-events: none; }
+        .new-story { text-align: center; margin-bottom: 1rem; }
     </style>
 </head>
 <body>
@@ -77,6 +78,9 @@
 
             return React.createElement(React.Fragment, null, [
                 React.createElement('h1', { key: 'h' }, 'Manage Stories'),
+                React.createElement('div', { key: 'new', className: 'new-story' },
+                    React.createElement('button', { onClick: () => window.location.href = '/submit' }, 'Submit New Story')
+                ),
                 React.createElement('div', { key: 'search', className: 'search-wrapper' }, [
                     React.createElement('span', { key: 'i', className: 'icon' }, '🔍'),
                     React.createElement('input', { key: 's', type: 'text', placeholder: 'Search', value: q, onChange: onSearch })
