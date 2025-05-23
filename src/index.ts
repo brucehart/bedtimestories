@@ -96,11 +96,17 @@ async function requireAuth(request: Request, env: Env): Promise<Response | { ema
     return { email };
 }
 
-export default {
-    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-        const url = new URL(request.url);
+interface Route {
+    method: string;
+    pattern: RegExp;
+    handler: (req: Request, env: Env, ctx: ExecutionContext, match: RegExpMatchArray, url: URL) => Promise<Response> | Response;
+}
 
-        if (request.method === 'GET' && url.pathname === '/login') {
+const preAuthRoutes: Route[] = [
+    {
+        method: 'GET',
+        pattern: /^\/login$/,
+        handler: (request, env, _ctx, _match, url) => {
             const redirectUri = url.origin + '/oauth/callback';
             const params = new URLSearchParams({
                 client_id: env.GOOGLE_CLIENT_ID,
@@ -111,8 +117,11 @@ export default {
             });
             return Response.redirect('https://accounts.google.com/o/oauth2/v2/auth?' + params.toString(), 302);
         }
-
-        if (request.method === 'GET' && url.pathname === '/oauth/callback') {
+    },
+    {
+        method: 'GET',
+        pattern: /^\/oauth\/callback$/,
+        handler: async (request, env, _ctx, _match, url) => {
             const code = url.searchParams.get('code');
             if (!code) return new Response('Missing code', { status: 400 });
             const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
@@ -135,38 +144,48 @@ export default {
             return new Response(null, {
                 status: 302,
                 headers: {
-                    'Location': '/',
+                    Location: '/',
                     'Set-Cookie': `session=${idToken}; HttpOnly; Path=/; Max-Age=${tenYears}`
                 }
             });
         }
+    }
+];
 
-        const auth = await requireAuth(request, env);
-        if (auth instanceof Response) return auth;
-
-        if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-            return env.ASSETS.fetch(request);
-        }
-
-        if (request.method === 'GET' &&
-            (url.pathname === '/submit' || url.pathname === '/submit.html' || url.pathname === '/submit/')) {
+const routes: Route[] = [
+    {
+        method: 'GET',
+        pattern: /^\/(?:|index\.html)$/,
+        handler: (request, env) => env.ASSETS.fetch(request)
+    },
+    {
+        method: 'GET',
+        pattern: /^\/submit(?:\.html|\/)?$/,
+        handler: (request, env) => {
             const assetRequest = new Request(request.url.replace(/\/submit\/?$/, '/submit.html'), request);
             return env.ASSETS.fetch(assetRequest);
         }
-
-        if (request.method === 'GET' &&
-            (url.pathname === '/manage' || url.pathname === '/manage.html' || url.pathname === '/manage/')) {
+    },
+    {
+        method: 'GET',
+        pattern: /^\/manage(?:\.html|\/)?$/,
+        handler: (request, env) => {
             const assetRequest = new Request(request.url.replace(/\/manage\/?$/, '/manage.html'), request);
             return env.ASSETS.fetch(assetRequest);
         }
-
-        if (request.method === 'GET' &&
-            (url.pathname === '/edit' || url.pathname === '/edit.html' || url.pathname === '/edit/')) {
+    },
+    {
+        method: 'GET',
+        pattern: /^\/edit(?:\.html|\/)?$/,
+        handler: (request, env) => {
             const assetRequest = new Request(request.url.replace(/\/edit\/?$/, '/edit.html'), request);
             return env.ASSETS.fetch(assetRequest);
         }
-
-        if (request.method === 'GET' && url.pathname === '/stories/list') {
+    },
+    {
+        method: 'GET',
+        pattern: /^\/stories\/list$/,
+        handler: async (request, env, _ctx, _match, url) => {
             try {
                 const page = Number(url.searchParams.get('page') || '1');
                 const q = url.searchParams.get('q');
@@ -195,8 +214,11 @@ export default {
                 return new Response('Internal Error', { status: 500 });
             }
         }
-
-        if (request.method === 'GET' && url.pathname === '/stories') {
+    },
+    {
+        method: 'GET',
+        pattern: /^\/stories$/,
+        handler: async (_request, env) => {
             try {
                 const stmt = env.DB.prepare('SELECT * FROM stories ORDER BY date DESC, id DESC LIMIT 1');
                 const story = await stmt.first<Story>();
@@ -208,19 +230,20 @@ export default {
                 return new Response('Internal Error', { status: 500 });
             }
         }
-
-        if (request.method === 'GET' && url.pathname.startsWith('/stories/')) {
-            const parts = url.pathname.split('/');
-            const id = Number(parts[2]);
+    },
+    {
+        method: 'GET',
+        pattern: /^\/stories\/(\d+)(?:\/(next|prev))?$/,
+        handler: async (_request, env, _ctx, match) => {
+            const id = Number(match[1]);
             if (!Number.isInteger(id)) {
                 return new Response('Invalid story id', { status: 400 });
             }
 
-            // /stories/:id/next or /stories/:id/prev
-            if (parts.length === 4 && (parts[3] === 'next' || parts[3] === 'prev')) {
+            if (match[2]) {
                 try {
-                    const order = parts[3] === 'next' ? 'DESC' : 'ASC';
-                    const cmp = parts[3] === 'next' ? '<' : '>';
+                    const order = match[2] === 'next' ? 'DESC' : 'ASC';
+                    const cmp = match[2] === 'next' ? '<' : '>';
                     const stmt = env.DB.prepare(
                         `SELECT * FROM stories WHERE (date ${cmp} (SELECT date FROM stories WHERE id = ?1)` +
                         ` OR (date = (SELECT date FROM stories WHERE id = ?1) AND id ${cmp} ?1)) ` +
@@ -247,8 +270,11 @@ export default {
                 return new Response('Internal Error', { status: 500 });
             }
         }
-
-        if (request.method === 'POST' && url.pathname === '/stories') {
+    },
+    {
+        method: 'POST',
+        pattern: /^\/stories$/,
+        handler: async (request, env) => {
             if (!request.headers.get('content-type')?.includes('multipart/form-data')) {
                 return new Response('Expected multipart/form-data', { status: 400 });
             }
@@ -257,13 +283,10 @@ export default {
             const contentMd = data.get('content');
             const dateStr = data.get('date');
             const imageFile = data.get('image');
-
             if (typeof title !== 'string' || typeof contentMd !== 'string') {
                 return new Response('Invalid form data', { status: 400 });
             }
-
             const contentHtml = markdownToHtml(contentMd);
-
             let imageKey: string | null = null;
             if (imageFile instanceof File) {
                 const arrayBuffer = await imageFile.arrayBuffer();
@@ -272,7 +295,6 @@ export default {
                 imageKey = crypto.randomUUID() + ext;
                 await env.IMAGES.put(imageKey, arrayBuffer);
             }
-
             try {
                 const stmt = env.DB.prepare(
                     'INSERT INTO stories (title, content, date, image_url, created, updated) VALUES (?1, ?2, ?3, ?4, datetime(\'now\'), datetime(\'now\'))'
@@ -280,14 +302,16 @@ export default {
                 const result = await stmt.run();
                 const id = result.meta.last_row_id;
                 return Response.json({ id });
-            } catch (err) {
+            } catch {
                 return new Response('Internal Error', { status: 500 });
             }
         }
-
-        if (request.method === 'PUT' && url.pathname.startsWith('/stories/')) {
-            const [, , idStr] = url.pathname.split('/');
-            const id = Number(idStr);
+    },
+    {
+        method: 'PUT',
+        pattern: /^\/stories\/(\d+)$/,
+        handler: async (request, env, _ctx, match) => {
+            const id = Number(match[1]);
             if (!Number.isInteger(id)) {
                 return new Response('Invalid story id', { status: 400 });
             }
@@ -328,10 +352,12 @@ export default {
                 return new Response('Internal Error', { status: 500 });
             }
         }
-
-        if (request.method === 'DELETE' && url.pathname.startsWith('/stories/')) {
-            const [, , idStr] = url.pathname.split('/');
-            const id = Number(idStr);
+    },
+    {
+        method: 'DELETE',
+        pattern: /^\/stories\/(\d+)$/,
+        handler: async (_request, env, _ctx, match) => {
+            const id = Number(match[1]);
             if (!Number.isInteger(id)) {
                 return new Response('Invalid story id', { status: 400 });
             }
@@ -342,6 +368,29 @@ export default {
                 return new Response('OK');
             } catch {
                 return new Response('Internal Error', { status: 500 });
+            }
+        }
+    }
+];
+
+export default {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+        const url = new URL(request.url);
+
+        for (const route of preAuthRoutes) {
+            if (request.method === route.method && route.pattern.test(url.pathname)) {
+                const match = url.pathname.match(route.pattern)!;
+                return await route.handler(request, env, ctx, match, url);
+            }
+        }
+
+        const auth = await requireAuth(request, env);
+        if (auth instanceof Response) return auth;
+
+        for (const route of routes) {
+            if (request.method === route.method && route.pattern.test(url.pathname)) {
+                const match = url.pathname.match(route.pattern)!;
+                return await route.handler(request, env, ctx, match, url);
             }
         }
 
