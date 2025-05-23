@@ -131,11 +131,12 @@ export default {
             if (!email) return new Response('Unauthorized', { status: 403 });
             const allowed = env.ALLOWED_ACCOUNTS.split(',').map(a => a.trim()).filter(Boolean);
             if (allowed.length > 0 && !allowed.includes(email)) return new Response('Forbidden', { status: 403 });
+            const tenYears = 60 * 60 * 24 * 365 * 10; // seconds
             return new Response(null, {
                 status: 302,
                 headers: {
                     'Location': '/',
-                    'Set-Cookie': `session=${idToken}; HttpOnly; Path=/`
+                    'Set-Cookie': `session=${idToken}; HttpOnly; Path=/; Max-Age=${tenYears}`
                 }
             });
         }
