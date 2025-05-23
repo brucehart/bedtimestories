@@ -161,9 +161,12 @@ const routes: Route[] = [
     {
         method: 'GET',
         pattern: /^\/submit(?:\.html|\/)?$/,
-        handler: (request, env) => {
+        handler: async (request, env) => {
             const assetRequest = new Request(request.url.replace(/\/submit\/?$/, '/submit.html'), request);
-            return env.ASSETS.fetch(assetRequest);
+            const res = await env.ASSETS.fetch(assetRequest);
+            const headers = new Headers(res.headers);
+            headers.set('Cache-Control', 'no-store');
+            return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
         }
     },
     {
@@ -177,9 +180,12 @@ const routes: Route[] = [
     {
         method: 'GET',
         pattern: /^\/edit(?:\.html|\/)?$/,
-        handler: (request, env) => {
+        handler: async (request, env) => {
             const assetRequest = new Request(request.url.replace(/\/edit\/?$/, '/edit.html'), request);
-            return env.ASSETS.fetch(assetRequest);
+            const res = await env.ASSETS.fetch(assetRequest);
+            const headers = new Headers(res.headers);
+            headers.set('Cache-Control', 'no-store');
+            return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
         }
     },
     {
