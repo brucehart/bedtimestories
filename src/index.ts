@@ -1,16 +1,7 @@
-/**
- * Welcome to Cloudflare Workers! This is your first worker.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your worker in action
- * - Run `npm run deploy` to publish your worker
- *
- * Bind resources to your worker in `wrangler.jsonc`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/workers/
- */
 
+// Cloudflare Worker used to store and manage short bedtime stories.
+
+// Data stored for each story record
 interface Story {
     id: number;
     title: string;
@@ -21,6 +12,7 @@ interface Story {
     updated: string | null;
 }
 
+// Bindings provided by wrangler configuration
 interface Env {
     DB: D1Database;
     ASSETS: Fetcher;
@@ -30,6 +22,7 @@ interface Env {
     ALLOWED_ACCOUNTS: string;
 }
 
+// Escape HTML special characters
 function escapeHtml(text: string): string {
     return text.replace(/[&<>"']/g, c => ({
         '&': '&amp;',
@@ -40,6 +33,7 @@ function escapeHtml(text: string): string {
     }[c] as string));
 }
 
+// Convert very small subset of markdown to HTML
 function markdownToHtml(md: string): string {
     return md
         .split(/\n\n+/)
@@ -57,6 +51,7 @@ function markdownToHtml(md: string): string {
         .join('');
 }
 
+// Parse cookies from a request header
 function parseCookies(cookieHeader: string | null): Record<string, string> {
     const cookies: Record<string, string> = {};
     if (!cookieHeader) return cookies;
@@ -67,6 +62,7 @@ function parseCookies(cookieHeader: string | null): Record<string, string> {
     return cookies;
 }
 
+// Validate the ID token from Google OAuth and return the user email
 async function verifyGoogleToken(token: string, env: Env): Promise<string | null> {
     if (env.GOOGLE_CLIENT_ID === 'test' && token === 'test-token') {
         return 'test@example.com';
@@ -79,6 +75,7 @@ async function verifyGoogleToken(token: string, env: Env): Promise<string | null
     return data.email as string;
 }
 
+// Guard that redirects to /login unless the user has a valid session
 async function requireAuth(request: Request, env: Env): Promise<Response | { email: string }> {
     const cookies = parseCookies(request.headers.get('Cookie'));
     const token = cookies['session'];
@@ -96,12 +93,14 @@ async function requireAuth(request: Request, env: Env): Promise<Response | { ema
     return { email };
 }
 
+// Simple route descriptor used by the router below
 interface Route {
     method: string;
     pattern: RegExp;
     handler: (req: Request, env: Env, ctx: ExecutionContext, match: RegExpMatchArray, url: URL) => Promise<Response> | Response;
 }
 
+// Routes for login flow and OAuth callback
 const preAuthRoutes: Route[] = [
     {
         method: 'GET',
@@ -152,6 +151,7 @@ const preAuthRoutes: Route[] = [
     }
 ];
 
+// Authenticated API and asset routes
 const routes: Route[] = [
     {
         method: 'GET',
@@ -373,6 +373,7 @@ const routes: Route[] = [
     }
 ];
 
+// Entry point that dispatches requests to the route handlers
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
         const url = new URL(request.url);
