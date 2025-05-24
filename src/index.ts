@@ -19,8 +19,7 @@ interface Env {
     IMAGES: R2Bucket;
     GOOGLE_CLIENT_ID: string;
     GOOGLE_CLIENT_SECRET: string;
-    ALLOWED_ACCOUNTS: string; 
-    SESSION_HMAC_KEY: string;  
+    ALLOWED_ACCOUNTS: string;     
 }
 
 const SESSION_DAYS = 180;
