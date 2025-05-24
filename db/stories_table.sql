@@ -9,3 +9,5 @@ CREATE TABLE stories (
 );
 
 CREATE INDEX idx_stories_date ON stories (date DESC);
+CREATE INDEX idx_stories_title_content ON stories(title, content);
+CREATE INDEX idx_stories_id ON stories(id);
