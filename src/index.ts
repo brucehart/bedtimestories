@@ -19,21 +19,27 @@ interface Env {
     IMAGES: R2Bucket;
     GOOGLE_CLIENT_ID: string;
     GOOGLE_CLIENT_SECRET: string;
-    ALLOWED_ACCOUNTS: string;     
+    ALLOWED_ACCOUNTS: string;    
+    SESSION_HMAC_KEY: string; 
 }
 
 const SESSION_DAYS = 180;
 const SESSION_MAXAGE = 60 * 60 * 24 * SESSION_DAYS;
-const SESSION_HMAC_KEY = "IcsZsMeT7t4VomO9lBJ/g1EsDqEkJuyVSjHQwQRUCj4=";
 
-const ENC_KEY = crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(SESSION_HMAC_KEY),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign", "verify"]
-);
-async function signSession(email: string) {
+let ENC_KEY_PROMISE: Promise<CryptoKey> | null = null;
+function getEncKey(env: Env): Promise<CryptoKey> {
+    if (!ENC_KEY_PROMISE) {
+        ENC_KEY_PROMISE = crypto.subtle.importKey(
+            "raw",
+            new TextEncoder().encode(env.SESSION_HMAC_KEY),
+            { name: "HMAC", hash: "SHA-256" },
+            false,
+            ["sign", "verify"]
+        );
+    }
+    return ENC_KEY_PROMISE;
+}
+async function signSession(email: string, env: Env) {
     const header = btoa('{"alg":"HS256","typ":"JWT"}')
         .replace(/=/g, "")
         .replace(/\+/g, "-")
@@ -46,14 +52,14 @@ async function signSession(email: string) {
         .replace(/\+/g, "-")
         .replace(/\//g, "_");
     const data = new TextEncoder().encode(`${header}.${payload}`);
-    const sig = await crypto.subtle.sign("HMAC", await ENC_KEY, data);
+    const sig = await crypto.subtle.sign("HMAC", await getEncKey(env), data);
     const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig)))
         .replace(/=/g, "")
         .replace(/\+/g, "-")
         .replace(/\//g, "_");
     return `${header}.${payload}.${sigB64}`;
 }
-async function verifySession(jwt: string): Promise<string | null> {
+async function verifySession(jwt: string, env: Env): Promise<string | null> {
     const [h, p, s] = jwt.split('.');
     if (!h || !p || !s) return null;
     const data = new TextEncoder().encode(`${h}.${p}`);
@@ -63,7 +69,7 @@ async function verifySession(jwt: string): Promise<string | null> {
     );
     const ok = await crypto.subtle.verify(
         "HMAC",
-        await ENC_KEY,
+        await getEncKey(env),
         sig,
         data
     );
@@ -135,11 +141,11 @@ async function requireAuth(request: Request, env: Env): Promise<Response | { ema
         return new Response(null, { status: 302, headers: { Location: '/login' } });
     }
     const url = new URL(request.url);
-    let email = await verifySession(token);
+    let email = await verifySession(token, env);
     if (!email) {
         email = await verifyGoogleToken(token, env).catch(() => null);
         if (email) {
-            const jwt = await signSession(email);
+            const jwt = await signSession(email, env);
             return new Response(null, {
                 status: 302,
                 headers: {

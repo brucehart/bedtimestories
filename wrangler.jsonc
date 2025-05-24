@@ -38,11 +38,8 @@
         * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
         */
        "vars": {
-               // Comma separated list of emails allowed to access the site
-               "ALLOWED_ACCOUNTS": "bruce.hart@gmail.com,stefanie.hart0203@gmail.com,stefaniehart0203@gmail.com",
-			   "GOOGLE_CLIENT_ID": "15975951327-bal6im6n6g6lc7st1tkolontpbfelnvj.apps.googleusercontent.com",
-			   "GOOGLE_CLIENT_SECRET": "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",
-
+               // Comma separated list of emails allowed to access the site               
+			   "GOOGLE_CLIENT_ID": "15975951327-bal6im6n6g6lc7st1tkolontpbfelnvj.apps.googleusercontent.com",			   
        },
 	/**
 	 * Note: Use secrets to store sensitive data.
