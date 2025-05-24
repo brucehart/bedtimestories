@@ -22,6 +22,56 @@ interface Env {
     ALLOWED_ACCOUNTS: string;
 }
 
+const SESSION_DAYS = 180;
+const SESSION_MAXAGE = 60 * 60 * 24 * SESSION_DAYS;
+const ENC_KEY = crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode("CHANGE-ME-32-BYTES-SECRET!"),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"]
+);
+async function signSession(email: string) {
+    const header = btoa('{"alg":"HS256","typ":"JWT"}')
+        .replace(/=/g, "")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_");
+    const now = Math.floor(Date.now() / 1000);
+    const payload = btoa(
+        JSON.stringify({ email, iat: now, exp: now + SESSION_MAXAGE })
+    )
+        .replace(/=/g, "")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_");
+    const data = new TextEncoder().encode(`${header}.${payload}`);
+    const sig = await crypto.subtle.sign("HMAC", await ENC_KEY, data);
+    const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig)))
+        .replace(/=/g, "")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_");
+    return `${header}.${payload}.${sigB64}`;
+}
+async function verifySession(jwt: string): Promise<string | null> {
+    const [h, p, s] = jwt.split('.');
+    if (!h || !p || !s) return null;
+    const data = new TextEncoder().encode(`${h}.${p}`);
+    const sig = Uint8Array.from(
+        atob(s.replace(/-/g, "+").replace(/_/g, "/")),
+        c => c.charCodeAt(0)
+    );
+    const ok = await crypto.subtle.verify(
+        "HMAC",
+        await ENC_KEY,
+        sig,
+        data
+    );
+    if (!ok) return null;
+    const { email, exp } = JSON.parse(
+        atob(p.replace(/-/g, "+").replace(/_/g, "/"))
+    );
+    return Date.now() / 1000 < exp ? email : null;
+}
+
 // Escape HTML special characters
 function escapeHtml(text: string): string {
     return text.replace(/[&<>"']/g, c => ({
@@ -82,7 +132,21 @@ async function requireAuth(request: Request, env: Env): Promise<Response | { ema
     if (!token) {
         return new Response(null, { status: 302, headers: { Location: '/login' } });
     }
-    const email = await verifyGoogleToken(token, env).catch(() => null);
+    const url = new URL(request.url);
+    let email = await verifySession(token);
+    if (!email) {
+        email = await verifyGoogleToken(token, env).catch(() => null);
+        if (email) {
+            const jwt = await signSession(email);
+            return new Response(null, {
+                status: 302,
+                headers: {
+                    Location: url.pathname + url.search,
+                    'Set-Cookie': `session=${jwt}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_MAXAGE}`
+                }
+            });
+        }
+    }
     if (!email) {
         return new Response(null, { status: 302, headers: { Location: '/login' } });
     }
@@ -139,12 +203,12 @@ const preAuthRoutes: Route[] = [
             if (!email) return new Response('Unauthorized', { status: 403 });
             const allowed = env.ALLOWED_ACCOUNTS.split(',').map(a => a.trim()).filter(Boolean);
             if (allowed.length > 0 && !allowed.includes(email)) return new Response('Forbidden', { status: 403 });
-            const tenYears = 60 * 60 * 24 * 365 * 10; // seconds
+            const jwt = await signSession(email);
             return new Response(null, {
                 status: 302,
                 headers: {
                     Location: '/',
-                    'Set-Cookie': `session=${idToken}; HttpOnly; Path=/; Max-Age=${tenYears}`
+                    'Set-Cookie': `session=${jwt}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_MAXAGE}`
                 }
             });
         }
@@ -404,3 +468,5 @@ export default {
         return new Response('Not Found', { status: 404 });
     },
 } satisfies ExportedHandler<Env>;
+
+export { signSession, verifySession, SESSION_MAXAGE };
