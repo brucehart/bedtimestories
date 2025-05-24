@@ -49,12 +49,12 @@
 	 * https://developers.cloudflare.com/workers/configuration/secrets/
 	 */
 	"secrets_store_secrets": [
-    {
-      "binding": "SESSION_HMAC_KEY",
-      "store_id": "16e005142a024501a490bc68130d236f",
-      "secret_name": "SESSION_HMAC_KEY"
-    }
-  ]
+		{
+		"binding": "SESSION_HMAC_KEY",
+		"store_id": "16e005142a024501a490bc68130d236f",
+		"secret_name": "SESSION_HMAC_KEY"
+		}
+	],
 
 	/**
 	 * Static Assets
