@@ -25,7 +25,7 @@ interface Env {
 
 const SESSION_DAYS = 180;
 const SESSION_MAXAGE = 60 * 60 * 24 * SESSION_DAYS;
-const SESSION_HMAC_KEY = await env.SESSION_HMAC_KEY.get();
+const SESSION_HMAC_KEY = 'IcsZsMeT7t4VomO9lBJ/g1EsDqEkJuyVSjHQwQRUCj4=";"
 
 const ENC_KEY = crypto.subtle.importKey(
     "raw",
