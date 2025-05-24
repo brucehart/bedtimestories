@@ -19,14 +19,15 @@ interface Env {
     IMAGES: R2Bucket;
     GOOGLE_CLIENT_ID: string;
     GOOGLE_CLIENT_SECRET: string;
-    ALLOWED_ACCOUNTS: string;
+    ALLOWED_ACCOUNTS: string; 
+    SESSION_HMAC_KEY: string;  
 }
 
 const SESSION_DAYS = 180;
 const SESSION_MAXAGE = 60 * 60 * 24 * SESSION_DAYS;
 const ENC_KEY = crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode("CHANGE-ME-32-BYTES-SECRET!"),
+    new TextEncoder().encode(env.SESSION_HMAC_KEY),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign", "verify"]
