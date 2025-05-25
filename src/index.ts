@@ -211,7 +211,7 @@ const preAuthRoutes: Route[] = [
             if (!email) return new Response('Unauthorized', { status: 403 });
             const allowed = env.ALLOWED_ACCOUNTS.split(',').map(a => a.trim()).filter(Boolean);
             if (allowed.length > 0 && !allowed.includes(email)) return new Response('Forbidden', { status: 403 });
-            const jwt = await signSession(email);
+            const jwt = await signSession(email, env);
             return new Response(null, {
                 status: 302,
                 headers: {
