@@ -134,14 +134,9 @@ async function verifyGoogleToken(token: string, env: Env): Promise<string | null
 
 // Check if the given email is allowed to access the application
 async function isAccountAllowed(email: string, env: Env): Promise<boolean> {
-    try {
-        const countRow = await env.DB.prepare(
-            'SELECT COUNT(*) as count FROM allowed_accounts'
-        ).first<{ count: number }>();
-        const hasEntries = (countRow?.count || 0) > 0;
-        if (!hasEntries) return true;
+    try {        
         const allowed = await env.DB.prepare(
-            'SELECT 1 FROM allowed_accounts WHERE email = ?1 LIMIT 1'
+            'SELECT 1 FROM allowed_accounts WHERE LOWER(email) = LOWER(?1) LIMIT 1'
         ).bind(email).first();
         return !!allowed;
     } catch {
