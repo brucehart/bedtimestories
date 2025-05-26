@@ -43,6 +43,10 @@ CREATE TABLE stories (
 CREATE INDEX idx_stories_date ON stories (date DESC);
 CREATE INDEX idx_stories_title_content ON stories(title, content);
 CREATE INDEX idx_stories_id ON stories(id);
+
+CREATE TABLE allowed_accounts (
+  email TEXT PRIMARY KEY
+);
 ```
 
 ## Deployment
@@ -63,10 +67,11 @@ Ensure these resources exist in your Cloudflare account before deploying.
 
 ### Authentication
 
-Access to the worker is protected using Google OAuth. Define a comma
-separated list of allowed Google accounts in `wrangler.jsonc` under the
-`ALLOWED_ACCOUNTS` variable. The Google OAuth client credentials should
-be stored as secrets named `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+Access to the worker is protected using Google OAuth. Permitted accounts are
+listed in the `allowed_accounts` table of the D1 database. Add or remove rows
+from this table to manage access. If the table is empty, any account is
+permitted. The Google OAuth client credentials should be stored as secrets
+named `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 
 
 ## API Summary
