@@ -19,8 +19,7 @@ interface Env {
     IMAGES: R2Bucket;
     GOOGLE_CLIENT_ID: string;
     GOOGLE_CLIENT_SECRET: string;
-    ALLOWED_ACCOUNTS: string;    
-    SESSION_HMAC_KEY: string; 
+    SESSION_HMAC_KEY: string;
 }
 
 const SESSION_DAYS = 180;
@@ -133,6 +132,23 @@ async function verifyGoogleToken(token: string, env: Env): Promise<string | null
     return data.email as string;
 }
 
+// Check if the given email is allowed to access the application
+async function isAccountAllowed(email: string, env: Env): Promise<boolean> {
+    try {
+        const countRow = await env.DB.prepare(
+            'SELECT COUNT(*) as count FROM allowed_accounts'
+        ).first<{ count: number }>();
+        const hasEntries = (countRow?.count || 0) > 0;
+        if (!hasEntries) return true;
+        const allowed = await env.DB.prepare(
+            'SELECT 1 FROM allowed_accounts WHERE email = ?1 LIMIT 1'
+        ).bind(email).first();
+        return !!allowed;
+    } catch {
+        return false;
+    }
+}
+
 // Guard that redirects to /login unless the user has a valid session
 async function requireAuth(request: Request, env: Env): Promise<Response | { email: string }> {
     const cookies = parseCookies(request.headers.get('Cookie'));
@@ -158,8 +174,7 @@ async function requireAuth(request: Request, env: Env): Promise<Response | { ema
     if (!email) {
         return new Response(null, { status: 302, headers: { Location: '/login' } });
     }
-    const allowed = env.ALLOWED_ACCOUNTS.split(',').map(a => a.trim()).filter(Boolean);
-    if (allowed.length > 0 && !allowed.includes(email)) {
+    if (!(await isAccountAllowed(email, env))) {
         return new Response('Forbidden', { status: 403 });
     }
     return { email };
@@ -209,8 +224,7 @@ const preAuthRoutes: Route[] = [
             const idToken = tokenJson.id_token as string | undefined;
             const email = idToken ? await verifyGoogleToken(idToken, env).catch(() => null) : null;
             if (!email) return new Response('Unauthorized', { status: 403 });
-            const allowed = env.ALLOWED_ACCOUNTS.split(',').map(a => a.trim()).filter(Boolean);
-            if (allowed.length > 0 && !allowed.includes(email)) return new Response('Forbidden', { status: 403 });
+            if (!(await isAccountAllowed(email, env))) return new Response('Forbidden', { status: 403 });
             const jwt = await signSession(email, env);
             return new Response(null, {
                 status: 302,
