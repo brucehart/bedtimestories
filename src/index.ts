@@ -307,7 +307,10 @@ const routes: Route[] = [
         pattern: /^\/stories$/,
         handler: async (_request, env) => {
             try {
-                const stmt = env.DB.prepare('SELECT * FROM stories ORDER BY date DESC, id DESC LIMIT 1');
+                const nowIso = new Date().toISOString();
+                const stmt = env.DB.prepare(
+                    'SELECT * FROM stories WHERE date <= ?1 ORDER BY date DESC, id DESC LIMIT 1'
+                ).bind(nowIso);
                 const story = await stmt.first<Story>();
                 if (!story) {
                     return new Response('Not Found', { status: 404 });
@@ -331,11 +334,13 @@ const routes: Route[] = [
                 try {
                     const order = match[2] === 'next' ? 'DESC' : 'ASC';
                     const cmp = match[2] === 'next' ? '<' : '>';
+                    const nowIso = new Date().toISOString();
                     const stmt = env.DB.prepare(
-                        `SELECT * FROM stories WHERE (date ${cmp} (SELECT date FROM stories WHERE id = ?1)` +
-                        ` OR (date = (SELECT date FROM stories WHERE id = ?1) AND id ${cmp} ?1)) ` +
+                        `SELECT * FROM stories WHERE date <= ?1 AND (` +
+                        `date ${cmp} (SELECT date FROM stories WHERE id = ?2)` +
+                        ` OR (date = (SELECT date FROM stories WHERE id = ?2) AND id ${cmp} ?2)) ` +
                         `ORDER BY date ${order}, id ${order} LIMIT 1`
-                    ).bind(id);
+                    ).bind(nowIso, id);
                     const story = await stmt.first<Story>();
                     if (!story) {
                         return new Response('Not Found', { status: 404 });
