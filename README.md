@@ -2,6 +2,8 @@
 
 This project is a small [Cloudflare Workers](https://developers.cloudflare.com/workers/) application for managing and serving short stories.  The worker exposes a minimal REST API backed by a D1 database and an R2 bucket for images and serves a React based frontend from the `public` directory.
 
+Stories may be scheduled by specifying a future date when submitting. Scheduled stories are hidden from the main viewer until their publish date but remain accessible through the manage interface or by direct link.
+
 ## Requirements
 
 - [Node.js](https://nodejs.org/) 18+
@@ -82,7 +84,7 @@ The worker exposes the following endpoints:
 - `GET /submit` – serves a form to add a new story
 - `GET /manage` – serves a page to edit or delete stories
 - `GET /stories/list` – returns all stories in JSON
-- `GET /stories` – returns the most recent story
+- `GET /stories` – returns the most recent story not scheduled for the future
 - `GET /stories/:id` – returns a single story
 - `POST /stories` – create a new story (multipart form data, fields: `title`, `content`, `date`, optional `image`)
 - `PUT /stories/:id` – update an existing story (multipart form data, fields: `title`, `content`, `date`, optional `image`)
