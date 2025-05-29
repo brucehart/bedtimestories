@@ -73,6 +73,7 @@ describe('Story page', () => {
         env.GOOGLE_CLIENT_ID = 'test';
         env.GOOGLE_CLIENT_SECRET = 'test';
         env.DB = createDb(['test@example.com'], []);
+        env.PUBLIC_VIEW = 'false';
 
         it('signs and verifies JWTs', async () => {
                 const jwt = await signSession('alice@example.com', env);
@@ -138,5 +139,26 @@ describe('Story page', () => {
                 const response = await SELF.fetch(new Request('https://example.com/stories', { headers: { cookie: `session=${jwt}` } }));
                 const story = await response.json<any>();
                 expect(story.id).toBe(past.id);
+        });
+
+        it('allows viewing without login when PUBLIC_VIEW is true', async () => {
+                env.PUBLIC_VIEW = 'true';
+                const response = await SELF.fetch(new Request('https://example.com/'));
+                const body = await response.text();
+                expect(body).toContain('<div id="root"></div>');
+        });
+
+        it('requires login for manage page even when PUBLIC_VIEW is true', async () => {
+                env.PUBLIC_VIEW = 'true';
+                const response = await SELF.fetch(new Request('https://example.com/manage'));
+                expect(response.status).toBe(302);
+                expect(response.headers.get('Location')).toBe('/login');
+        });
+
+        it('requires login for submit page even when PUBLIC_VIEW is true', async () => {
+                env.PUBLIC_VIEW = 'true';
+                const response = await SELF.fetch(new Request('https://example.com/submit'));
+                expect(response.status).toBe(302);
+                expect(response.headers.get('Location')).toBe('/login');
         });
 });

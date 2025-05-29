@@ -20,6 +20,7 @@ interface Env {
     GOOGLE_CLIENT_ID: string;
     GOOGLE_CLIENT_SECRET: string;
     SESSION_HMAC_KEY: string;
+    PUBLIC_VIEW?: string;
 }
 
 const SESSION_DAYS = 180;
@@ -146,14 +147,23 @@ async function isAccountAllowed(email: string, env: Env): Promise<boolean> {
 
 // Guard that redirects to /login unless the user has a valid session
 async function requireAuth(request: Request, env: Env): Promise<Response | { email: string }> {
+    const url = new URL(request.url);
+    const isPublicRoute = env.PUBLIC_VIEW === 'true' && request.method === 'GET' && (
+        url.pathname === '/' ||
+        url.pathname === '/index.html' ||
+        url.pathname === '/stories' ||
+        /^\/stories\/\d+(?:\/(next|prev))?$/.test(url.pathname)
+    );
+
     const cookies = parseCookies(request.headers.get('Cookie'));
     const token = cookies['session'];
-    if (!token) {
-        return new Response(null, { status: 302, headers: { Location: '/login' } });
+
+    if (!token && isPublicRoute) {
+        return { email: '' };
     }
-    const url = new URL(request.url);
-    let email = await verifySession(token, env);
-    if (!email) {
+
+    let email = token ? await verifySession(token, env) : null;
+    if (!email && token) {
         email = await verifyGoogleToken(token, env).catch(() => null);
         if (email) {
             const jwt = await signSession(email, env);
@@ -166,12 +176,17 @@ async function requireAuth(request: Request, env: Env): Promise<Response | { ema
             });
         }
     }
+
     if (!email) {
+        if (isPublicRoute) return { email: '' };
         return new Response(null, { status: 302, headers: { Location: '/login' } });
     }
+
     if (!(await isAccountAllowed(email, env))) {
+        if (isPublicRoute) return { email: '' };
         return new Response('Forbidden', { status: 403 });
     }
+
     return { email };
 }
 
