@@ -133,20 +133,36 @@ async function verifyGoogleToken(token: string, env: Env): Promise<string | null
     return data.email as string;
 }
 
-// Check if the given email is allowed to access the application
-async function isAccountAllowed(email: string, env: Env): Promise<boolean> {
-    try {        
-        const allowed = await env.DB.prepare(
-            'SELECT 1 FROM allowed_accounts WHERE LOWER(email) = LOWER(?1) LIMIT 1'
-        ).bind(email).first();
-        return !!allowed;
+// Retrieve the role for the given account or null if not allowed. If the
+// `allowed_accounts` table is empty any account is treated as an editor.
+async function getAccountRole(
+    email: string,
+    env: Env
+): Promise<'editor' | 'reader' | null> {
+    try {
+        const row = await env.DB
+            .prepare(
+                'SELECT role FROM allowed_accounts WHERE LOWER(email) = LOWER(?1) LIMIT 1'
+            )
+            .bind(email)
+            .first<{ role: string }>();
+        if (row) return row.role === 'reader' ? 'reader' : 'editor';
+        const count = await env.DB
+            .prepare('SELECT COUNT(*) as count FROM allowed_accounts')
+            .first<{ count: number }>();
+        return count && count.count === 0 ? 'editor' : null;
     } catch {
-        return false;
+        return null;
     }
 }
 
+interface AuthInfo {
+    email: string;
+    role: 'reader' | 'editor';
+}
+
 // Guard that redirects to /login unless the user has a valid session
-async function requireAuth(request: Request, env: Env): Promise<Response | { email: string }> {
+async function requireAuth(request: Request, env: Env): Promise<Response | AuthInfo> {
     const url = new URL(request.url);
     const isPublicRoute = env.PUBLIC_VIEW === 'true' && request.method === 'GET' && (
         url.pathname === '/' ||
@@ -181,20 +197,25 @@ async function requireAuth(request: Request, env: Env): Promise<Response | { ema
         if (isPublicRoute) return { email: '' };
         return new Response(null, { status: 302, headers: { Location: '/login' } });
     }
-
-    if (!(await isAccountAllowed(email, env))) {
-        if (isPublicRoute) return { email: '' };
+    const role = await getAccountRole(email, env);
+    if (!role) {
         return new Response('Forbidden', { status: 403 });
     }
-
-    return { email };
+    return { email, role };
 }
 
 // Simple route descriptor used by the router below
 interface Route {
     method: string;
     pattern: RegExp;
-    handler: (req: Request, env: Env, ctx: ExecutionContext, match: RegExpMatchArray, url: URL) => Promise<Response> | Response;
+    handler: (
+        req: Request,
+        env: Env,
+        ctx: ExecutionContext,
+        match: RegExpMatchArray,
+        url: URL,
+        auth: AuthInfo
+    ) => Promise<Response> | Response;
 }
 
 // Routes for login flow and OAuth callback
@@ -202,7 +223,7 @@ const preAuthRoutes: Route[] = [
     {
         method: 'GET',
         pattern: /^\/login$/,
-        handler: (request, env, _ctx, _match, url) => {
+        handler: (request, env, _ctx, _match, url, _auth) => {
             const redirectUri = url.origin + '/oauth/callback';
             const params = new URLSearchParams({
                 client_id: env.GOOGLE_CLIENT_ID,
@@ -217,7 +238,7 @@ const preAuthRoutes: Route[] = [
     {
         method: 'GET',
         pattern: /^\/oauth\/callback$/,
-        handler: async (request, env, _ctx, _match, url) => {
+        handler: async (request, env, _ctx, _match, url, _auth) => {
             const code = url.searchParams.get('code');
             if (!code) return new Response('Missing code', { status: 400 });
             const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
@@ -234,7 +255,8 @@ const preAuthRoutes: Route[] = [
             const idToken = tokenJson.id_token as string | undefined;
             const email = idToken ? await verifyGoogleToken(idToken, env).catch(() => null) : null;
             if (!email) return new Response('Unauthorized', { status: 403 });
-            if (!(await isAccountAllowed(email, env))) return new Response('Forbidden', { status: 403 });
+            const role = await getAccountRole(email, env);
+            if (!role) return new Response('Forbidden', { status: 403 });
             const jwt = await signSession(email, env);
             return new Response(null, {
                 status: 302,
@@ -252,12 +274,13 @@ const routes: Route[] = [
     {
         method: 'GET',
         pattern: /^\/(?:|index\.html)$/,
-        handler: (request, env) => env.ASSETS.fetch(request)
+        handler: (request, env, _ctx, _match, _url, _auth) => env.ASSETS.fetch(request)
     },
     {
         method: 'GET',
         pattern: /^\/submit(?:\.html|\/)?$/,
-        handler: async (request, env) => {
+        handler: async (request, env, _ctx, _match, _url, auth) => {
+            if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
             const assetRequest = new Request(request.url.replace(/\/submit\/?$/, '/submit.html'), request);
             const res = await env.ASSETS.fetch(assetRequest);
             const headers = new Headers(res.headers);
@@ -268,7 +291,8 @@ const routes: Route[] = [
     {
         method: 'GET',
         pattern: /^\/manage(?:\.html|\/)?$/,
-        handler: (request, env) => {
+        handler: (request, env, _ctx, _match, _url, auth) => {
+            if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
             const assetRequest = new Request(request.url.replace(/\/manage\/?$/, '/manage.html'), request);
             return env.ASSETS.fetch(assetRequest);
         }
@@ -276,7 +300,8 @@ const routes: Route[] = [
     {
         method: 'GET',
         pattern: /^\/edit(?:\.html|\/)?$/,
-        handler: async (request, env) => {
+        handler: async (request, env, _ctx, _match, _url, auth) => {
+            if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
             const assetRequest = new Request(request.url.replace(/\/edit\/?$/, '/edit.html'), request);
             const res = await env.ASSETS.fetch(assetRequest);
             const headers = new Headers(res.headers);
@@ -287,7 +312,8 @@ const routes: Route[] = [
     {
         method: 'GET',
         pattern: /^\/stories\/list$/,
-        handler: async (request, env, _ctx, _match, url) => {
+        handler: async (request, env, _ctx, _match, url, auth) => {
+            if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
             try {
                 const page = Number(url.searchParams.get('page') || '1');
                 const q = url.searchParams.get('q');
@@ -320,7 +346,7 @@ const routes: Route[] = [
     {
         method: 'GET',
         pattern: /^\/stories$/,
-        handler: async (_request, env) => {
+        handler: async (_request, env, _ctx, _match, _url, _auth) => {
             try {
                 const nowIso = new Date().toISOString();
                 const stmt = env.DB.prepare(
@@ -339,7 +365,7 @@ const routes: Route[] = [
     {
         method: 'GET',
         pattern: /^\/stories\/(\d+)(?:\/(next|prev))?$/,
-        handler: async (_request, env, _ctx, match) => {
+        handler: async (_request, env, _ctx, match, _url, _auth) => {
             const id = Number(match[1]);
             if (!Number.isInteger(id)) {
                 return new Response('Invalid story id', { status: 400 });
@@ -381,7 +407,8 @@ const routes: Route[] = [
     {
         method: 'POST',
         pattern: /^\/stories$/,
-        handler: async (request, env) => {
+        handler: async (request, env, _ctx, _match, _url, auth) => {
+            if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
             if (!request.headers.get('content-type')?.includes('multipart/form-data')) {
                 return new Response('Expected multipart/form-data', { status: 400 });
             }
@@ -417,7 +444,8 @@ const routes: Route[] = [
     {
         method: 'PUT',
         pattern: /^\/stories\/(\d+)$/,
-        handler: async (request, env, _ctx, match) => {
+        handler: async (request, env, _ctx, match, _url, auth) => {
+            if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
             const id = Number(match[1]);
             if (!Number.isInteger(id)) {
                 return new Response('Invalid story id', { status: 400 });
@@ -463,7 +491,8 @@ const routes: Route[] = [
     {
         method: 'DELETE',
         pattern: /^\/stories\/(\d+)$/,
-        handler: async (_request, env, _ctx, match) => {
+        handler: async (_request, env, _ctx, match, _url, auth) => {
+            if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
             const id = Number(match[1]);
             if (!Number.isInteger(id)) {
                 return new Response('Invalid story id', { status: 400 });
@@ -488,7 +517,7 @@ export default {
         for (const route of preAuthRoutes) {
             if (request.method === route.method && route.pattern.test(url.pathname)) {
                 const match = url.pathname.match(route.pattern)!;
-                return await route.handler(request, env, ctx, match, url);
+                return await route.handler(request, env, ctx, match, url, { email: '', role: 'reader' });
             }
         }
 
@@ -498,7 +527,7 @@ export default {
         for (const route of routes) {
             if (request.method === route.method && route.pattern.test(url.pathname)) {
                 const match = url.pathname.match(route.pattern)!;
-                return await route.handler(request, env, ctx, match, url);
+                return await route.handler(request, env, ctx, match, url, auth);
             }
         }
 

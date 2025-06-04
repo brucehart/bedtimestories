@@ -47,7 +47,8 @@ CREATE INDEX idx_stories_title_content ON stories(title, content);
 CREATE INDEX idx_stories_id ON stories(id);
 
 CREATE TABLE allowed_accounts (
-  email TEXT PRIMARY KEY
+  email TEXT PRIMARY KEY,
+  role  TEXT NOT NULL DEFAULT 'editor'
 );
 ```
 
@@ -70,10 +71,12 @@ Ensure these resources exist in your Cloudflare account before deploying.
 ### Authentication
 
 Access to the worker is protected using Google OAuth. Permitted accounts are
-listed in the `allowed_accounts` table of the D1 database. Add or remove rows
-from this table to manage access. If the table is empty, any account is
-permitted. The Google OAuth client credentials should be stored as secrets
-named `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+listed in the `allowed_accounts` table of the D1 database along with a `role`
+value of either `reader` or `editor`. Readers can only view stories while
+editors may add, modify or delete them. Add or remove rows from this table to
+manage access. If the table is empty, any account is permitted as an editor.
+The Google OAuth client credentials should be stored as secrets named
+`GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 
 
 ## API Summary
