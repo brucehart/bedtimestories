@@ -12,7 +12,16 @@ interface Story {
     updated: string | null;
 }
 
-function createAllowedDb(emails: string[]) {
+type Account = { email: string; role: 'reader' | 'editor' };
+
+function normalizeAccounts(accounts: (string | Account)[]): Account[] {
+    return accounts.map(a =>
+        typeof a === 'string' ? { email: a, role: 'editor' } : a
+    );
+}
+
+function createAllowedDb(accounts: (string | Account)[]) {
+    const acc = normalizeAccounts(accounts);
     return {
         prepare(query: string) {
             return {
@@ -20,9 +29,10 @@ function createAllowedDb(emails: string[]) {
                     return {
                         async first<T>() {
                             if (query.includes('COUNT(*)')) {
-                                return { count: emails.length } as T;
+                                return { count: acc.length } as T;
                             }
-                            return emails.includes(email as string) ? ({} as T) : null;
+                            const row = acc.find(a => a.email.toLowerCase() === (email ?? '').toLowerCase());
+                            return row ? ({ role: row.role } as T) : null;
                         }
                     };
                 }
@@ -31,7 +41,8 @@ function createAllowedDb(emails: string[]) {
     } as unknown as D1Database;
 }
 
-function createDb(emails: string[], stories: Story[]) {
+function createDb(accounts: (string | Account)[], stories: Story[]) {
+    const acc = normalizeAccounts(accounts);
     return {
         prepare(query: string) {
             return {
@@ -40,7 +51,8 @@ function createDb(emails: string[], stories: Story[]) {
                         async first<T>() {
                             if (query.includes('FROM allowed_accounts')) {
                                 const email = params[0] as string;
-                                return emails.map(e => e.toLowerCase()).includes(email.toLowerCase()) ? ({} as T) : null;
+                                const row = acc.find(a => a.email.toLowerCase() === email.toLowerCase());
+                                return row ? ({ role: row.role } as T) : null;
                             }
                             if (query.includes('WHERE date <= ?1')) {
                                 const nowIso = params[0] as string;
@@ -128,6 +140,13 @@ describe('Story page', () => {
                 const body = await response.text();
                 expect(body).toContain('Manage Stories');
                 expect(body).toContain('Submit New Story');
+        });
+
+        it('denies reader accounts access to editor pages', async () => {
+                env.DB = createDb([{ email: 'reader@example.com', role: 'reader' }], []);
+                const jwt = await signSession('reader@example.com', env);
+                const resp = await SELF.fetch(new Request('https://example.com/submit', { headers: { cookie: `session=${jwt}` } }));
+                expect(resp.status).toBe(403);
         });
 
         it('hides future stories from default endpoint', async () => {
