@@ -164,12 +164,16 @@ interface AuthInfo {
 // Guard that redirects to /login unless the user has a valid session
 async function requireAuth(request: Request, env: Env): Promise<Response | AuthInfo> {
     const url = new URL(request.url);
-    const isPublicRoute = env.PUBLIC_VIEW === 'true' && request.method === 'GET' && (
-        url.pathname === '/' ||
-        url.pathname === '/index.html' ||
-        url.pathname === '/stories' ||
-        /^\/stories\/\d+(?:\/(next|prev))?$/.test(url.pathname)
-    );
+    const isPublicRoute =
+        env.PUBLIC_VIEW === 'true' &&
+        request.method === 'GET' &&
+        (
+            url.pathname === '/' ||
+            url.pathname === '/index.html' ||
+            url.pathname === '/stories' ||
+            /^\/stories\/\d+(?:\/(next|prev))?$/.test(url.pathname) ||
+            url.pathname.startsWith('/images/')
+        );
 
     const cookies = parseCookies(request.headers.get('Cookie'));
     const token = cookies['session'];
@@ -307,6 +311,23 @@ const routes: Route[] = [
             const headers = new Headers(res.headers);
             headers.set('Cache-Control', 'no-store');
             return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+        }
+    },
+    {
+        method: 'GET',
+        pattern: /^\/images\/(.+)$/,
+        handler: async (_request, env, _ctx, match) => {
+            const key = decodeURIComponent(match[1]);
+            try {
+                const obj = await env.IMAGES.get(key);
+                if (!obj) return new Response('Not Found', { status: 404 });
+                const headers = new Headers();
+                obj.writeHttpMetadata(headers);
+                headers.set('etag', obj.httpEtag);
+                return new Response(obj.body, { headers });
+            } catch {
+                return new Response('Internal Error', { status: 500 });
+            }
         }
     },
     {
