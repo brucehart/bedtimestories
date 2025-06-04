@@ -55,7 +55,7 @@
                         div.innerHTML = data.content;
                         setContent(div.innerText);
                         setDate(new Date(data.date).toISOString().substring(0, 10));
-                        setPreview(data.image_url ? 'https://pub-dd7bdd98b50f4f72b3e1797a4a2694aa.r2.dev/' + data.image_url : null);
+                        setPreview(data.image_url ? '/images/' + data.image_url : null);
                     });
             }, [id]);
 
