@@ -86,7 +86,7 @@ The worker exposes the following endpoints:
 - `GET /` – serves the story viewer
 - `GET /submit` – serves a form to add a new story
 - `GET /manage` – serves a page to edit or delete stories
-- `GET /images/:key` – returns an image from the `IMAGES` bucket
+- `GET /images/:key` – returns an image from the `IMAGES` bucket with long-term caching
 - `GET /stories/list` – returns all stories in JSON
 - `GET /stories` – returns the most recent story not scheduled for the future
 - `GET /stories/:id` – returns a single story
