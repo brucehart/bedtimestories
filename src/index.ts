@@ -324,6 +324,7 @@ const routes: Route[] = [
                 const headers = new Headers();
                 obj.writeHttpMetadata(headers);
                 headers.set('etag', obj.httpEtag);
+                headers.set('Cache-Control', 'public, max-age=31536000, immutable');
                 return new Response(obj.body, { headers });
             } catch {
                 return new Response('Internal Error', { status: 500 });

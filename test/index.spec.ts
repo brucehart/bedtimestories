@@ -207,6 +207,7 @@ describe('Story page', () => {
                 const jwt = await signSession('test@example.com', env);
                 const response = await SELF.fetch(new Request('https://example.com/images/foo.txt', { headers: { cookie: `session=${jwt}` } }));
                 expect(await response.text()).toBe('hello');
+                expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable');
         });
 
         it('allows image access without login when PUBLIC_VIEW is true', async () => {
@@ -214,5 +215,6 @@ describe('Story page', () => {
                 env.IMAGES = createImages({ 'foo.txt': 'world' });
                 const response = await SELF.fetch(new Request('https://example.com/images/foo.txt'));
                 expect(await response.text()).toBe('world');
+                expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable');
         });
 });
