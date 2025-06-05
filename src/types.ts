@@ -1,0 +1,37 @@
+export interface Story {
+    id: number;
+    title: string;
+    content: string;
+    date: string;
+    image_url: string | null;
+    created: string | null;
+    updated: string | null;
+}
+
+export interface Env {
+    DB: D1Database;
+    ASSETS: Fetcher;
+    IMAGES: R2Bucket;
+    GOOGLE_CLIENT_ID: string;
+    GOOGLE_CLIENT_SECRET: string;
+    SESSION_HMAC_KEY: string;
+    PUBLIC_VIEW?: string;
+}
+
+export interface AuthInfo {
+    email: string;
+    role: 'reader' | 'editor';
+}
+
+export interface Route {
+    method: string;
+    pattern: RegExp;
+    handler: (
+        req: Request,
+        env: Env,
+        ctx: ExecutionContext,
+        match: RegExpMatchArray,
+        url: URL,
+        auth: AuthInfo
+    ) => Promise<Response> | Response;
+}
