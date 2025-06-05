@@ -5,92 +5,75 @@ This Agents.md file provides comprehensive guidance for OpenAI Codex and other A
 
 ## Project Structure for OpenAI Codex Navigation
 
-The repository’s root contains the main configuration and documentation files:
+## Project Code Structure
 
-LICENSE
-README.md
-package.json
-package-lock.json
-tsconfig.json
-vitest.config.mts
-worker-configuration.d.ts
-wrangler.jsonc
+The codebase is organized into clearly defined directories and files to separate concerns and facilitate navigation for agents and contributors:
 
-src/
-Holds the Cloudflare Worker code. The single TypeScript file defines request handling and routing logic:
+- **Root Directory**
+  - Contains primary configuration and metadata files:
+    - `LICENSE`
+    - `README.md`
+    - `package.json` / `package-lock.json`
+    - `tsconfig.json` (TypeScript configuration)
+    - `vitest.config.mts` (Vitest test runner config)
+    - `worker-configuration.d.ts` (auto-generated typings)
+    - `wrangler.jsonc` (Cloudflare Workers configuration)
 
-src/
-└── index.ts
-Beginning of src/index.ts:
+- **`src/`**
+  - Contains all TypeScript source code for the Cloudflare Worker.
+  - Main entry point: `src/index.ts`
+    - Implements HTTP request routing and handler logic.
+    - Defines core interfaces, such as the `Story` type for story records:
+      ```typescript
+      interface Story {
+          id: number;
+          title: string;
+          content: string;
+          date: string;
+          image_url: string | null;
+          created: string | null;
+          updated: string | null;
+      }
+      ```
 
-// Cloudflare Worker used to store and manage short bedtime stories.
+- **`public/`**
+  - Hosts all static HTML assets served by the worker:
+    - `index.html` — main landing page
+    - `edit.html` — story editing interface
+    - `manage.html` — admin/management view
+    - `submit.html` — story submission form
 
-// Data stored for each story record
-interface Story {
-    id: number;
-    title: string;
-    content: string;
-    date: string;
-    image_url: string | null;
-    created: string | null;
-    updated: string | null;
-}
+- **`db/`**
+  - Contains SQL schema files for D1 database tables:
+    - `allowed_accounts_table.sql` — permitted user accounts
+    - `stories_table.sql` — schema for storing stories
+      - Example snippet:
+        ```sql
+        CREATE TABLE stories (
+          id        INTEGER PRIMARY KEY AUTOINCREMENT,
+          title     TEXT NOT NULL,
+          content   TEXT NOT NULL,
+          date      DATE NOT NULL,
+          ...
+        );
+        ```
 
-public/
-Contains the static HTML front-end served by the worker:
+- **`test/`**
+  - Houses automated tests (using Vitest) and their configuration:
+    - `index.spec.ts` — main test suite importing the worker and utilities
+    - `env.d.ts` — test environment typings
+    - `tsconfig.json` — test-specific TypeScript config
 
-public/
-├── edit.html
-├── index.html
-├── manage.html
-└── submit.html
+---
 
-db/
-SQL files to create the D1 database tables:
+**Summary:**  
+- **Source code:** `src/`
+- **Static frontend:** `public/`
+- **Database schema:** `db/`
+- **Tests:** `test/`
+- **Configuration & metadata:** root files
 
-db/
-├── allowed_accounts_table.sql
-└── stories_table.sql
-stories_table.sql defines the stories table:
-
-CREATE TABLE stories (
-  id        INTEGER PRIMARY KEY AUTOINCREMENT,
-  title     TEXT NOT NULL,
-  content   TEXT NOT NULL,
-  date      DATE NOT NULL,
-  ...
-);
-
-test/
-Vitest test suite with a TypeScript specification file and supporting config:
-
-test/
-├── env.d.ts
-├── index.spec.ts
-└── tsconfig.json
-
-Beginning of test/index.spec.ts shows the test setup:
-
-import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
-import { describe, it, expect } from 'vitest';
-import worker, { signSession, verifySession, SESSION_MAXAGE } from '../src/index';
-
-The README describes the purpose of the project and how to run it:
-
-# Bedtime Stories
-This project is a small Cloudflare Workers application for managing and serving short stories...
-
-Overall, the project is organized into:
-
-Source code in src/
-
-Static HTML in public/
-
-Database schema in db/
-
-Tests in test/
-
-Additional configuration files (tsconfig.json, vitest.config.mts, wrangler.jsonc) and auto-generated typings (worker-configuration.d.ts). The root package.json defines scripts for development (wrangler dev), deployment (wrangler deploy), and running tests (vitest).
+This modular structure enables clear navigation and division of responsibilities, streamlining development and maintenance for all agents and contributors.
 
 ## Coding Conventions for OpenAI Codex
 
