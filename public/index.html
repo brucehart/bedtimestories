@@ -47,6 +47,7 @@
             const [error, setError] = useState(null);
             const [nextStory, setNextStory] = useState(null);
             const [prevStory, setPrevStory] = useState(null);
+            const [imageLoaded, setImageLoaded] = useState(false);
             const updateNeighbors = id => {
                 Promise.all([
                     authFetch("/stories/" + id + "/prev").then(res => res.ok ? res.json() : null).catch(() => null),
@@ -65,6 +66,7 @@
 
             const setAndPush = data => {
                 setStory(data);
+                setImageLoaded(false);
                 history.replaceState(null, '', '?id=' + data.id);
                 updateNeighbors(data.id);
             };
@@ -97,7 +99,7 @@
 
             return React.createElement('div', { className: 'story-container' }, [
                 React.createElement('div', { className: 'title-wrapper', key: 'title-wrap' }, [                    React.createElement('h1', { className: 'title', key: 'title' }, story.title),                    React.createElement('div', { className: 'nav-buttons', key: 'nav' }, [                        React.createElement('button', { key: 'up', onClick: loadPrev, disabled: !prevStory }, '▲'),                        React.createElement('button', { key: 'down', onClick: loadNext, disabled: !nextStory }, '▼')                    ])                ]),
-                story.image_url ? React.createElement('img', { className: 'story-image', src: "/images/" + story.image_url, alt: story.title, key: 'image' }) : null,
+                story.image_url ? React.createElement('img', { className: 'story-image', src: "/images/" + story.image_url, alt: story.title, key: 'image', onLoad: () => setImageLoaded(true), style: { display: imageLoaded ? 'block' : 'none' } }) : null,
                 //React.createElement('p', { className: 'date', key: 'date' }, new Date(story.date).toLocaleDateString()),
                 React.createElement('div', {
                     className: 'content',
