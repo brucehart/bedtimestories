@@ -127,18 +127,26 @@ const routes: Route[] = [
                 if (q) {
                     const like = `%${q}%`;
                     stmt = env.DB.prepare(
-                        'SELECT * FROM stories WHERE title LIKE ?1 OR content LIKE ?1 ORDER BY date DESC, id DESC LIMIT ?2 OFFSET ?3'
+                        'SELECT s.*, (SELECT AVG(rating) FROM story_ratings WHERE story_id = s.id) as average_rating FROM stories s WHERE title LIKE ?1 OR content LIKE ?1 ORDER BY date DESC, id DESC LIMIT ?2 OFFSET ?3'
                     ).bind(like, limit, offset);
                     countStmt = env.DB.prepare(
                         'SELECT COUNT(*) as count FROM stories WHERE title LIKE ?1 OR content LIKE ?1'
                     ).bind(like);
                 } else {
                     stmt = env.DB.prepare(
-                        'SELECT * FROM stories ORDER BY date DESC, id DESC LIMIT ?1 OFFSET ?2'
+                        'SELECT s.*, (SELECT AVG(rating) FROM story_ratings WHERE story_id = s.id) as average_rating FROM stories s ORDER BY date DESC, id DESC LIMIT ?1 OFFSET ?2'
                     ).bind(limit, offset);
                     countStmt = env.DB.prepare('SELECT COUNT(*) as count FROM stories');
                 }
                 const { results } = await stmt.all<Story>();
+                // Add average_rating to each story if not already present
+                for (const s of results) {
+                    if (s.average_rating === undefined) {
+                        const ratingStmt = env.DB.prepare('SELECT AVG(rating) as avg_rating FROM story_ratings WHERE story_id = ?1').bind(s.id);
+                        const ratingRow = await ratingStmt.first<{ avg_rating: number }>();
+                        s.average_rating = ratingRow?.avg_rating ? Math.round(ratingRow.avg_rating * 10) / 10 : null;
+                    }
+                }
                 const count = (await countStmt.first<{ count: number }>())?.count || 0;
                 return Response.json({ stories: results, total: count });
             } catch {
@@ -153,7 +161,7 @@ const routes: Route[] = [
             try {
                 const nowIso = new Date().toISOString();
                 const stmt = env.DB.prepare(
-                    'SELECT * FROM stories WHERE date <= ?1 ORDER BY date DESC, id DESC LIMIT 1'
+                    'SELECT s.*, (SELECT AVG(rating) FROM story_ratings WHERE story_id = s.id) as average_rating FROM stories s WHERE date <= ?1 ORDER BY date DESC, id DESC LIMIT 1'
                 ).bind(nowIso);
                 const story = await stmt.first<Story>();
                 if (!story) {
@@ -189,6 +197,10 @@ const routes: Route[] = [
                     if (!story) {
                         return new Response('Not Found', { status: 404 });
                     }
+                    // Fetch average rating
+                    const ratingStmt = env.DB.prepare('SELECT AVG(rating) as avg_rating FROM story_ratings WHERE story_id = ?1').bind(story.id);
+                    const ratingRow = await ratingStmt.first<{ avg_rating: number }>();
+                    story.average_rating = ratingRow?.avg_rating ? Math.round(ratingRow.avg_rating * 10) / 10 : null;
                     return Response.json(story);
                 } catch {
                     return new Response('Internal Error', { status: 500 });
@@ -201,6 +213,10 @@ const routes: Route[] = [
                 if (!story) {
                     return new Response('Not Found', { status: 404 });
                 }
+                // Fetch average rating
+                const ratingStmt = env.DB.prepare('SELECT AVG(rating) as avg_rating FROM story_ratings WHERE story_id = ?1').bind(story.id);
+                const ratingRow = await ratingStmt.first<{ avg_rating: number }>();
+                story.average_rating = ratingRow?.avg_rating ? Math.round(ratingRow.avg_rating * 10) / 10 : null;
                 return Response.json(story);
             } catch {
                 return new Response('Internal Error', { status: 500 });
@@ -305,6 +321,37 @@ const routes: Route[] = [
                 await env.DB.prepare('DELETE FROM stories WHERE id = ?1').bind(id).run();
                 if (story?.image_url) await env.IMAGES.delete(story.image_url);
                 return new Response('OK');
+            } catch {
+                return new Response('Internal Error', { status: 500 });
+            }
+        }
+    },
+    {
+        method: 'POST',
+        pattern: /^\/stories\/(\d+)\/rate$/,
+        handler: async (request, env, _ctx, match) => {
+            const id = Number(match[1]);
+            if (!Number.isInteger(id)) {
+                return new Response('Invalid story id', { status: 400 });
+            }
+            let rating: number;
+            try {
+                const data = await request.json() as { rating: number };
+                rating = Number(data.rating);
+                if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+                    return new Response('Invalid rating', { status: 400 });
+                }
+            } catch {
+                return new Response('Invalid request', { status: 400 });
+            }
+            try {
+                // Insert rating
+                await env.DB.prepare('INSERT INTO story_ratings (story_id, rating) VALUES (?1, ?2)')
+                    .bind(id, rating).run();
+                // Return new average
+                const ratingStmt = env.DB.prepare('SELECT AVG(rating) as avg_rating FROM story_ratings WHERE story_id = ?1').bind(id);
+                const ratingRow = await ratingStmt.first<{ avg_rating: number }>();
+                return Response.json({ average_rating: ratingRow?.avg_rating ? Math.round(ratingRow.avg_rating * 10) / 10 : null });
             } catch {
                 return new Response('Internal Error', { status: 500 });
             }

@@ -6,6 +6,14 @@ export interface Story {
     image_url: string | null;
     created: string | null;
     updated: string | null;
+    average_rating?: number | null; // average star rating, null if none
+}
+
+export interface StoryRating {
+    id: number;
+    story_id: number;
+    rating: number;
+    created: string;
 }
 
 export interface Env {

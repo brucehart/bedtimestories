@@ -10,6 +10,8 @@
         textarea { width: 100%; font-family: inherit; }
         img { max-width: 100%; border-radius: 8px; }
         .drop-zone { padding: 1rem; border: 2px dashed #ccc; text-align: center; cursor: pointer; }
+        .star-rating { display: flex; align-items: center; }
+        .star-rating span { margin-right: 0.2rem; }
     </style>
 </head>
 <body>
@@ -44,6 +46,7 @@
             const [date, setDate] = useState('');
             const [imageFile, setImageFile] = useState(null);
             const [preview, setPreview] = useState(null);
+            const [story, setStory] = useState(null);
             const fileInput = useRef(null);
 
             useEffect(() => {
@@ -56,6 +59,7 @@
                         setContent(div.innerText);
                         setDate(new Date(data.date).toISOString().substring(0, 10));
                         setPreview(data.image_url ? '/images/' + data.image_url : null);
+                        setStory(data);
                     });
             }, [id]);
 
@@ -99,6 +103,15 @@
                 React.createElement('input', { key: 't', type: 'text', placeholder: 'Title', value: title, required: true, onChange: e => setTitle(e.target.value) }),
                 React.createElement('input', { key: 'd', type: 'date', value: date, required: true, onChange: e => setDate(e.target.value) }),
                 React.createElement('textarea', { key: 'c', rows: 10, placeholder: 'Story in Markdown', value: content, required: true, onChange: e => setContent(e.target.value) }),
+                story && story.average_rating !== undefined ?
+                    React.createElement('div', { key: 'rating', className: 'star-rating' }, [
+                        React.createElement('span', { key: 'label' }, 'Current Rating: '),
+                        story.average_rating ?
+                            React.createElement('span', { key: 'stars', style: { color: '#f5c518', fontSize: '1.2em' } }, '★'.repeat(Math.round(story.average_rating)) + '☆'.repeat(5 - Math.round(story.average_rating)),
+                                ` (${story.average_rating.toFixed(1)})`)
+                            : React.createElement('span', { key: 'no-rating', style: { color: '#aaa' } }, 'Not rated yet')
+                    ])
+                : null,
                 React.createElement('div', { key: 'dz', className: 'drop-zone', onClick: () => fileInput.current && fileInput.current.click() }, imageFile ? 'Change image' : 'Click, paste or drop image here'),
                 React.createElement('input', { key: 'f', type: 'file', accept: 'image/*', style: { display: 'none' }, ref: fileInput, onChange: e => handleFile(e.target.files[0]) }),
                 preview ? React.createElement('img', { key: 'p', src: preview }) : null,

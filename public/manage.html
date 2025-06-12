@@ -88,11 +88,13 @@
                 React.createElement('div', { key: 'list', className: 'story-list' }, stories.map(s =>
                     React.createElement('div', { key: s.id, className: 'story-item' }, [
                         React.createElement('span', { key: 't' + s.id }, s.title),
-                        React.createElement('span', { key: 'a' + s.id }, [
-                            React.createElement('button', { key: 'v', onClick: () => window.location.href = '/?id=' + s.id }, 'View'),
-                            React.createElement('button', { key: 'e', onClick: () => window.location.href = '/edit.html?id=' + s.id }, 'Edit'),
-                            React.createElement('button', { key: 'd', onClick: () => remove(s.id) }, 'Delete')
-                        ])
+                        s.average_rating ?
+                            React.createElement('span', { key: 'r' + s.id, style: { color: '#f5c518', marginLeft: '0.5em' } },
+                                '★'.repeat(Math.round(s.average_rating)) + '☆'.repeat(5 - Math.round(s.average_rating)),
+                                ` (${s.average_rating.toFixed(1)})`)
+                            : React.createElement('span', { key: 'r' + s.id, style: { color: '#aaa', marginLeft: '0.5em' } }, 'No rating'),
+                        React.createElement('button', { key: 'e' + s.id, onClick: () => window.location.href = '/edit.html?id=' + s.id }, 'Edit'),
+                        React.createElement('button', { key: 'd' + s.id, onClick: () => remove(s.id) }, 'Delete')
                     ])
                 )),
                 React.createElement('div', { key: 'p', className: 'pagination' }, [
