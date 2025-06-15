@@ -120,11 +120,30 @@ const routes: Route[] = [
             try {
                 const page = Number(url.searchParams.get('page') || '1');
                 const q = url.searchParams.get('q');
+                const dateStr = url.searchParams.get('date');
                 const limit = 10;
                 const offset = (page - 1) * limit;
                 let stmt: D1PreparedStatement;
                 let countStmt: D1PreparedStatement;
-                if (q) {
+                if (dateStr) {
+                    const day = new Date(dateStr).toISOString().substring(0, 10);
+                    if (q) {
+                        const like = `%${q}%`;
+                        stmt = env.DB.prepare(
+                            'SELECT * FROM stories WHERE substr(date,1,10) = ?1 AND (title LIKE ?2 OR content LIKE ?2) ORDER BY date DESC, id DESC LIMIT ?3 OFFSET ?4'
+                        ).bind(day, like, limit, offset);
+                        countStmt = env.DB.prepare(
+                            'SELECT COUNT(*) as count FROM stories WHERE substr(date,1,10) = ?1 AND (title LIKE ?2 OR content LIKE ?2)'
+                        ).bind(day, like);
+                    } else {
+                        stmt = env.DB.prepare(
+                            'SELECT * FROM stories WHERE substr(date,1,10) = ?1 ORDER BY date DESC, id DESC LIMIT ?2 OFFSET ?3'
+                        ).bind(day, limit, offset);
+                        countStmt = env.DB.prepare(
+                            'SELECT COUNT(*) as count FROM stories WHERE substr(date,1,10) = ?1'
+                        ).bind(day);
+                    }
+                } else if (q) {
                     const like = `%${q}%`;
                     stmt = env.DB.prepare(
                         'SELECT * FROM stories WHERE title LIKE ?1 OR content LIKE ?1 ORDER BY date DESC, id DESC LIMIT ?2 OFFSET ?3'
