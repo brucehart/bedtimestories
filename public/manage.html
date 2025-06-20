@@ -13,7 +13,15 @@
         .search-wrapper { position: relative; max-width: 300px; margin: 0 auto 1rem; }
         .search-wrapper input[type="text"] { width: 100%; padding-left: 1.5rem; box-sizing: border-box; }
         .search-wrapper input[type="date"] { width: 100%; margin-top: 0.25rem; box-sizing: border-box; }
-        .search-wrapper .icon { position: absolute; left: 0.25rem; top: 50%; transform: translateY(-50%); pointer-events: none; }
+        /* Position the search icon based on the text input rather than the
+           total wrapper height so it aligns correctly when additional fields
+           are present. */
+        .search-wrapper .icon {
+            position: absolute;
+            left: 0.25rem;
+            top: 0.5rem; /* Align with the text field */
+            pointer-events: none;
+        }
         .new-story { text-align: center; margin-bottom: 1rem; }
     </style>
 </head>
