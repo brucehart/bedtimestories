@@ -11,8 +11,17 @@
         .story-item { display: flex; justify-content: space-between; margin-bottom: 0.5rem; }
         .pagination { display: flex; justify-content: center; gap: 0.5rem; margin-top: 1rem; }
         .search-wrapper { position: relative; max-width: 300px; margin: 0 auto 1rem; }
-        .search-wrapper input { width: 100%; padding-left: 1.5rem; box-sizing: border-box; }
-        .search-wrapper .icon { position: absolute; left: 0.25rem; top: 50%; transform: translateY(-50%); pointer-events: none; }
+        .search-wrapper input[type="text"] { width: 100%; padding-left: 1.5rem; box-sizing: border-box; }
+        .search-wrapper input[type="date"] { width: 100%; margin-top: 0.25rem; box-sizing: border-box; }
+        /* Position the search icon based on the text input rather than the
+           total wrapper height so it aligns correctly when additional fields
+           are present. */
+        .search-wrapper .icon {
+            position: absolute;
+            left: 0.25rem;
+            top: 0.5rem; /* Align with the text field */
+            pointer-events: none;
+        }
         .new-story { text-align: center; margin-bottom: 1rem; }
     </style>
 </head>
@@ -45,9 +54,13 @@
             const [page, setPage] = useState(1);
             const [total, setTotal] = useState(0);
             const [q, setQ] = useState('');
+            const [date, setDate] = useState('');
 
-            const load = (p = page, search = q) => {
-                authFetch(`/stories/list?page=${p}&q=${encodeURIComponent(search)}`)
+            const load = (p = page, search = q, d = date) => {
+                const params = new URLSearchParams({ page: String(p) });
+                if (search) params.set('q', search);
+                if (d) params.set('date', d);
+                authFetch(`/stories/list?${params.toString()}`)
                     .then(res => res.json())
                     .then(data => {
                         setStories(data.stories);
@@ -56,13 +69,13 @@
                     });
             };
 
-            useEffect(() => load(1, q), []);
+            useEffect(() => load(1, q, date), []);
 
             const remove = async id => {
                 if (!confirm('Are You Sure?')) return;
                 const res = await authFetch('/stories/' + id, { method: 'DELETE' });
                 if (res.ok) {
-                    load(page, q);
+                    load(page, q, date);
                 } else {
                     alert('Failed to delete');
                 }
@@ -71,7 +84,13 @@
             const onSearch = e => {
                 const value = e.target.value;
                 setQ(value);
-                load(1, value);
+                load(1, value, date);
+            };
+
+            const onDateChange = e => {
+                const value = e.target.value;
+                setDate(value);
+                load(1, q, value);
             };
 
             const totalPages = Math.ceil(total / 10) || 1;
@@ -83,7 +102,8 @@
                 ),
                 React.createElement('div', { key: 'search', className: 'search-wrapper' }, [
                     React.createElement('span', { key: 'i', className: 'icon' }, '🔍'),
-                    React.createElement('input', { key: 's', type: 'text', placeholder: 'Search', value: q, onChange: onSearch })
+                    React.createElement('input', { key: 's', type: 'text', placeholder: 'Search', value: q, onChange: onSearch }),
+                    React.createElement('input', { key: 'd', type: 'date', value: date, onChange: onDateChange })
                 ]),
                 React.createElement('div', { key: 'list', className: 'story-list' }, stories.map(s =>
                     React.createElement('div', { key: s.id, className: 'story-item' }, [
@@ -96,9 +116,9 @@
                     ])
                 )),
                 React.createElement('div', { key: 'p', className: 'pagination' }, [
-                    React.createElement('button', { key: 'prev', disabled: page <= 1, onClick: () => load(page - 1, q) }, 'Previous'),
+                    React.createElement('button', { key: 'prev', disabled: page <= 1, onClick: () => load(page - 1, q, date) }, 'Previous'),
                     React.createElement('span', { key: 'info' }, `Page ${page} of ${totalPages}`),
-                    React.createElement('button', { key: 'next', disabled: page >= totalPages, onClick: () => load(page + 1, q) }, 'Next')
+                    React.createElement('button', { key: 'next', disabled: page >= totalPages, onClick: () => load(page + 1, q, date) }, 'Next')
                 ])
             ]);
         }
