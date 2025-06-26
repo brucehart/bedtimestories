@@ -37,3 +37,14 @@ export function parseCookies(cookieHeader: string | null): Record<string, string
     }
     return cookies;
 }
+
+// Return the current time shifted to US Eastern timezone as an ISO string
+export function easternNowIso(): string {
+    const now = new Date();
+    // Get the same wall-clock time in America/New_York. Parsing the string gives
+    // us a Date object in UTC representing that local time.
+    const eastern = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const offset = now.getTime() - eastern.getTime();
+    // Subtracting the offset yields the timestamp aligned with Eastern time
+    return new Date(now.getTime() - offset).toISOString();
+}
