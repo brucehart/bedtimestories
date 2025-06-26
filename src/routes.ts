@@ -1,5 +1,5 @@
 import { AuthInfo, Env, Route, Story } from './types';
-import { markdownToHtml } from './utils';
+import { markdownToHtml, easternNowIso } from './utils';
 import { signSession, SESSION_MAXAGE } from './session';
 import { verifyGoogleToken, getAccountRole, requireAuth } from './auth';
 
@@ -170,7 +170,7 @@ const routes: Route[] = [
         pattern: /^\/stories$/,
         handler: async (_request, env) => {
             try {
-                const nowIso = new Date().toISOString();
+                const nowIso = easternNowIso();
                 const stmt = env.DB.prepare(
                     'SELECT * FROM stories WHERE date <= ?1 ORDER BY date DESC, id DESC LIMIT 1'
                 ).bind(nowIso);
@@ -197,7 +197,7 @@ const routes: Route[] = [
                 try {
                     const order = match[2] === 'next' ? 'DESC' : 'ASC';
                     const cmp = match[2] === 'next' ? '<' : '>';
-                    const nowIso = new Date().toISOString();
+                    const nowIso = easternNowIso();
                     const stmt = env.DB.prepare(
                         `SELECT * FROM stories WHERE date <= ?1 AND (` +
                         `date ${cmp} (SELECT date FROM stories WHERE id = ?2)` +
