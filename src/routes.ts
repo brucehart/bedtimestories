@@ -239,11 +239,14 @@ const routes: Route[] = [
             const contentMd = data.get('content');
             const dateStr = data.get('date');
             const imageFile = data.get('image');
+            const videoFile = data.get('video');
+            const videoFile = data.get('video');
             if (typeof title !== 'string' || typeof contentMd !== 'string') {
                 return new Response('Invalid form data', { status: 400 });
             }
             const contentHtml = markdownToHtml(contentMd);
             let imageKey: string | null = null;
+            let videoKey: string | null = null;
             if (imageFile instanceof File) {
                 const arrayBuffer = await imageFile.arrayBuffer();
                 const parts = imageFile.name.split('.');
@@ -251,10 +254,17 @@ const routes: Route[] = [
                 imageKey = crypto.randomUUID() + ext;
                 await env.IMAGES.put(imageKey, arrayBuffer);
             }
+            if (videoFile instanceof File) {
+                const arrayBuffer = await videoFile.arrayBuffer();
+                const parts = videoFile.name.split('.');
+                const ext = parts.length > 1 ? '.' + parts.pop() : '';
+                videoKey = crypto.randomUUID() + ext;
+                await env.IMAGES.put(videoKey, arrayBuffer);
+            }
             try {
                 const stmt = env.DB.prepare(
-                    'INSERT INTO stories (title, content, date, image_url, created, updated) VALUES (?1, ?2, ?3, ?4, datetime(\'now\'), datetime(\'now\'))'
-                ).bind(title, contentHtml, typeof dateStr === 'string' && dateStr ? new Date(dateStr).toISOString() : new Date().toISOString(), imageKey);
+                    'INSERT INTO stories (title, content, date, image_url, video_url, created, updated) VALUES (?1, ?2, ?3, ?4, ?5, datetime(\'now\'), datetime(\'now\'))'
+                ).bind(title, contentHtml, typeof dateStr === 'string' && dateStr ? new Date(dateStr).toISOString() : new Date().toISOString(), imageKey, videoKey);
                 const result = await stmt.run();
                 const id = result.meta.last_row_id;
                 return Response.json({ id });
@@ -285,8 +295,9 @@ const routes: Route[] = [
             }
             const contentHtml = markdownToHtml(contentMd);
             let imageKey: string | undefined;
+            let videoKey: string | undefined;
             try {
-                const old = await env.DB.prepare('SELECT image_url FROM stories WHERE id = ?1').bind(id).first<{ image_url: string | null }>();
+                const old = await env.DB.prepare('SELECT image_url, video_url FROM stories WHERE id = ?1').bind(id).first<{ image_url: string | null; video_url: string | null }>();
                 if (imageFile instanceof File) {
                     const arrayBuffer = await imageFile.arrayBuffer();
                     const parts = imageFile.name.split('.');
@@ -295,15 +306,26 @@ const routes: Route[] = [
                     await env.IMAGES.put(imageKey, arrayBuffer);
                     if (old?.image_url) await env.IMAGES.delete(old.image_url);
                 }
+                if (videoFile instanceof File) {
+                    const arrayBuffer = await videoFile.arrayBuffer();
+                    const parts = videoFile.name.split('.');
+                    const ext = parts.length > 1 ? '.' + parts.pop() : '';
+                    videoKey = crypto.randomUUID() + ext;
+                    await env.IMAGES.put(videoKey, arrayBuffer);
+                    if (old?.video_url) await env.IMAGES.delete(old.video_url);
+                }
                 const stmt = env.DB.prepare(
-                    'UPDATE stories SET title = ?1, content = ?2, date = ?3, updated = datetime(\'now\')' + (imageKey !== undefined ? ', image_url = ?4' : '') + ' WHERE id = ?' + (imageKey !== undefined ? '5' : '4')
+                    'UPDATE stories SET title = ?1, content = ?2, date = ?3, updated = datetime(\'now\')' +
+                    (imageKey !== undefined ? ', image_url = ?4' : '') +
+                    (videoKey !== undefined ? (imageKey !== undefined ? ', video_url = ?5' : ', video_url = ?4') : '') +
+                    ' WHERE id = ?' + (imageKey !== undefined || videoKey !== undefined ? (imageKey !== undefined && videoKey !== undefined ? '6' : '5') : '4')
                 );
                 const dateIso = typeof dateStr === 'string' && dateStr ? new Date(dateStr).toISOString() : new Date().toISOString();
-                if (imageKey !== undefined) {
-                    await stmt.bind(title, contentHtml, dateIso, imageKey, id).run();
-                } else {
-                    await stmt.bind(title, contentHtml, dateIso, id).run();
-                }
+                const params: (string | number)[] = [title, contentHtml, dateIso];
+                if (imageKey !== undefined) params.push(imageKey);
+                if (videoKey !== undefined) params.push(videoKey);
+                params.push(id);
+                await stmt.bind(...params).run();
                 return new Response('OK');
             } catch {
                 return new Response('Internal Error', { status: 500 });
@@ -320,9 +342,10 @@ const routes: Route[] = [
                 return new Response('Invalid story id', { status: 400 });
             }
             try {
-                const story = await env.DB.prepare('SELECT image_url FROM stories WHERE id = ?1').bind(id).first<{ image_url: string | null }>();
+                const story = await env.DB.prepare('SELECT image_url, video_url FROM stories WHERE id = ?1').bind(id).first<{ image_url: string | null; video_url: string | null }>();
                 await env.DB.prepare('DELETE FROM stories WHERE id = ?1').bind(id).run();
                 if (story?.image_url) await env.IMAGES.delete(story.image_url);
+                if (story?.video_url) await env.IMAGES.delete(story.video_url);
                 return new Response('OK');
             } catch {
                 return new Response('Internal Error', { status: 500 });

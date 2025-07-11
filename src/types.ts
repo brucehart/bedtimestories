@@ -4,6 +4,7 @@ export interface Story {
     content: string;
     date: string;
     image_url: string | null;
+    video_url: string | null;
     created: string | null;
     updated: string | null;
 }

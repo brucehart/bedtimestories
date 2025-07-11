@@ -8,6 +8,7 @@ interface Story {
     content: string;
     date: string;
     image_url: string | null;
+    video_url: string | null;
     created: string | null;
     updated: string | null;
 }
@@ -172,8 +173,8 @@ describe('Story page', () => {
         });
 
         it('hides future stories from default endpoint', async () => {
-                const past = { id: 1, title: 'Past', content: '', date: new Date('2020-01-01').toISOString(), image_url: null, created: null, updated: null };
-                const future = { id: 2, title: 'Future', content: '', date: new Date(Date.now() + 86400000).toISOString(), image_url: null, created: null, updated: null };
+                const past = { id: 1, title: 'Past', content: '', date: new Date('2020-01-01').toISOString(), image_url: null, video_url: null, created: null, updated: null };
+                const future = { id: 2, title: 'Future', content: '', date: new Date(Date.now() + 86400000).toISOString(), image_url: null, video_url: null, created: null, updated: null };
                 env.DB = createDb(['test@example.com'], [past, future]);
                 const jwt = await signSession('test@example.com', env);
                 const response = await SELF.fetch(new Request('https://example.com/stories', { headers: { cookie: `session=${jwt}` } }));

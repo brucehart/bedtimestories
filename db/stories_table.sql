@@ -4,6 +4,7 @@ CREATE TABLE stories (
   content   TEXT NOT NULL,
   date      DATE NOT NULL,
   image_url TEXT,
+  video_url TEXT,
   created   DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated   DATETIME DEFAULT CURRENT_TIMESTAMP
 );

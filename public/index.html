@@ -14,6 +14,7 @@
         .nav-buttons button { background: none; border: none; cursor: pointer; font-size: 1.5rem; line-height: 1; }
         .nav-buttons button:disabled { color: #ccc; cursor: default; }
         .date { color: #666; margin-bottom: 1em; }
+        .play-btn { position: absolute; bottom: 0.5rem; right: 0.5rem; background: rgba(0,0,0,0.6); color: #fff; border: none; border-radius: 50%; width: 2rem; height: 2rem; display: flex; align-items: center; justify-content: center; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -48,6 +49,8 @@
             const [nextStory, setNextStory] = useState(null);
             const [prevStory, setPrevStory] = useState(null);
             const [imageLoaded, setImageLoaded] = useState(false);
+            const [playing, setPlaying] = useState(false);
+            const videoRef = React.useRef(null);
             const updateNeighbors = id => {
                 Promise.all([
                     authFetch("/stories/" + id + "/prev").then(res => res.ok ? res.json() : null).catch(() => null),
@@ -67,6 +70,7 @@
             const setAndPush = data => {
                 setStory(data);
                 setImageLoaded(false);
+                setPlaying(false);
                 history.replaceState(null, '', '?id=' + data.id);
                 updateNeighbors(data.id);
             };
@@ -79,6 +83,18 @@
             const loadPrev = () => {
                 if (!prevStory) return;
                 setAndPush(prevStory);
+            };
+
+            const toggleVideo = () => {
+                if (!story.video_url) return;
+                if (playing) {
+                    videoRef.current.pause();
+                    videoRef.current.currentTime = 0;
+                    setPlaying(false);
+                } else {
+                    videoRef.current.play();
+                    setPlaying(true);
+                }
             };
 
             useEffect(() => {
@@ -99,7 +115,11 @@
 
             return React.createElement('div', { className: 'story-container' }, [
                 React.createElement('div', { className: 'title-wrapper', key: 'title-wrap' }, [                    React.createElement('h1', { className: 'title', key: 'title' }, story.title),                    React.createElement('div', { className: 'nav-buttons', key: 'nav' }, [                        React.createElement('button', { key: 'up', onClick: loadPrev, disabled: !prevStory }, '▲'),                        React.createElement('button', { key: 'down', onClick: loadNext, disabled: !nextStory }, '▼')                    ])                ]),
-                story.image_url ? React.createElement('img', { className: 'story-image', src: "/images/" + story.image_url, alt: story.title, key: 'image', onLoad: () => setImageLoaded(true), style: { display: imageLoaded ? 'block' : 'none' } }) : null,
+                story.image_url ? React.createElement('div', { key: 'media', style: { position: 'relative' } }, [
+                    React.createElement('img', { className: 'story-image', src: "/images/" + story.image_url, alt: story.title, onLoad: () => setImageLoaded(true), style: { display: playing ? 'none' : (imageLoaded ? 'block' : 'none') } }),
+                    story.video_url ? React.createElement('video', { ref: videoRef, src: "/images/" + story.video_url, loop: true, preload: 'auto', style: { display: playing ? 'block' : 'none', width: '100%', borderRadius: '8px' } }) : null,
+                    story.video_url ? React.createElement('button', { className: 'play-btn', onClick: toggleVideo }, playing ? '⏸' : '▶') : null
+                ]) : null,
                 //React.createElement('p', { className: 'date', key: 'date' }, new Date(story.date).toLocaleDateString()),
                 React.createElement('div', {
                     className: 'content',

@@ -43,7 +43,9 @@
             const [content, setContent] = useState('');
             const [date, setDate] = useState('');
             const [imageFile, setImageFile] = useState(null);
+            const [videoFile, setVideoFile] = useState(null);
             const [preview, setPreview] = useState(null);
+            const [videoPreview, setVideoPreview] = useState(null);
             const fileInput = useRef(null);
 
             useEffect(() => {
@@ -56,13 +58,19 @@
                         setContent(div.innerText);
                         setDate(new Date(data.date).toISOString().substring(0, 10));
                         setPreview(data.image_url ? '/images/' + data.image_url : null);
+                        setVideoPreview(data.video_url ? '/images/' + data.video_url : null);
                     });
             }, [id]);
 
             const handleFile = file => {
                 if (file) {
-                    setImageFile(file);
-                    setPreview(URL.createObjectURL(file));
+                    if (file.type.startsWith('video/')) {
+                        setVideoFile(file);
+                        setVideoPreview(URL.createObjectURL(file));
+                    } else {
+                        setImageFile(file);
+                        setPreview(URL.createObjectURL(file));
+                    }
                 }
             };
 
@@ -85,6 +93,7 @@
                 fd.append('content', content);
                 fd.append('date', date);
                 if (imageFile) fd.append('image', imageFile, imageFile.name);
+                if (videoFile) fd.append('video', videoFile, videoFile.name);
                 const res = await authFetch('/stories/' + id, { method: 'PUT', body: fd });
                 if (res.ok) {
                     alert('Story saved');
@@ -99,9 +108,10 @@
                 React.createElement('input', { key: 't', type: 'text', placeholder: 'Title', value: title, required: true, onChange: e => setTitle(e.target.value) }),
                 React.createElement('input', { key: 'd', type: 'date', value: date, required: true, onChange: e => setDate(e.target.value) }),
                 React.createElement('textarea', { key: 'c', rows: 10, placeholder: 'Story in Markdown', value: content, required: true, onChange: e => setContent(e.target.value) }),
-                React.createElement('div', { key: 'dz', className: 'drop-zone', onClick: () => fileInput.current && fileInput.current.click() }, imageFile ? 'Change image' : 'Click, paste or drop image here'),
-                React.createElement('input', { key: 'f', type: 'file', accept: 'image/*', style: { display: 'none' }, ref: fileInput, onChange: e => handleFile(e.target.files[0]) }),
+                React.createElement('div', { key: 'dz', className: 'drop-zone', onClick: () => fileInput.current && fileInput.current.click() }, imageFile || videoFile ? 'Change file' : 'Click, paste or drop image or video here'),
+                React.createElement('input', { key: 'f', type: 'file', accept: 'image/*,video/mp4', style: { display: 'none' }, ref: fileInput, onChange: e => handleFile(e.target.files[0]) }),
                 preview ? React.createElement('img', { key: 'p', src: preview }) : null,
+                videoPreview ? React.createElement('video', { key: 'vp', src: videoPreview, controls: true, style: { maxWidth: '100%' } }) : null,
                 React.createElement('button', { key: 'b', type: 'submit' }, 'Save')
             ]);
         }
