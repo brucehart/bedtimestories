@@ -239,8 +239,7 @@ const routes: Route[] = [
             const contentMd = data.get('content');
             const dateStr = data.get('date');
             const imageFile = data.get('image');
-            const videoFile = data.get('video');
-            const videoFile = data.get('video');
+            const videoFile = data.get('video');            
             if (typeof title !== 'string' || typeof contentMd !== 'string') {
                 return new Response('Invalid form data', { status: 400 });
             }
