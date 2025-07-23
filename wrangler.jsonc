@@ -39,7 +39,8 @@
         */
        "vars": {
                "GOOGLE_CLIENT_ID": "15975951327-bal6im6n6g6lc7st1tkolontpbfelnvj.apps.googleusercontent.com",
-			   "PUBLIC_VIEW": "false"
+               "OAUTH_CALLBACK_URL": "https://bedtimestories.bruce-hart.workers.dev/oauth/callback",
+                           "PUBLIC_VIEW": "false"
        },
 	/**
 	 * Note: Use secrets to store sensitive data.

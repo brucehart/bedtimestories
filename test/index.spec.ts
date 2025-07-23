@@ -105,6 +105,7 @@ const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 describe('Story page', () => {
         env.GOOGLE_CLIENT_ID = 'test';
         env.GOOGLE_CLIENT_SECRET = 'test';
+        env.OAUTH_CALLBACK_URL = 'https://auth.example.com/oauth/callback';
         env.DB = createDb(['test@example.com'], []);
         env.IMAGES = createImages({});
         env.PUBLIC_VIEW = 'false';

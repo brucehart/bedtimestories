@@ -15,6 +15,7 @@ export interface Env {
     IMAGES: R2Bucket;
     GOOGLE_CLIENT_ID: string;
     GOOGLE_CLIENT_SECRET: string;
+    OAUTH_CALLBACK_URL: string;
     SESSION_HMAC_KEY: string;
     PUBLIC_VIEW?: string;
 }

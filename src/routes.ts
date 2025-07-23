@@ -1,6 +1,6 @@
 import { AuthInfo, Env, Route, Story } from './types';
 import { markdownToHtml, easternNowIso } from './utils';
-import { signSession, SESSION_MAXAGE } from './session';
+import { signSession, signState, verifyState, verifySession, SESSION_MAXAGE } from './session';
 import { verifyGoogleToken, getAccountRole, requireAuth } from './auth';
 
 // Routes for login flow and OAuth callback
@@ -8,31 +8,52 @@ const preAuthRoutes: Route[] = [
     {
         method: 'GET',
         pattern: /^\/login$/,
-        handler: (_request, env, _ctx, _match, url) => {
-            const redirectUri = url.origin + '/oauth/callback';
+        handler: async (_request, env, _ctx, _match, url) => {
+            const redirectUri = env.OAUTH_CALLBACK_URL;
+            const state = await signState(url.origin, env);
             const params = new URLSearchParams({
                 client_id: env.GOOGLE_CLIENT_ID,
                 redirect_uri: redirectUri,
                 response_type: 'code',
                 scope: 'openid email',
-                prompt: 'select_account'
+                prompt: 'select_account',
+                state
             });
-            return Response.redirect('https://accounts.google.com/o/oauth2/v2/auth?' + params.toString(), 302);
+            return Response.redirect(
+                'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString(),
+                302
+            );
         }
     },
     {
         method: 'GET',
         pattern: /^\/oauth\/callback$/,
-        handler: async (request, env, _ctx, _match, url) => {
+        handler: async (_request, env, _ctx, _match, url) => {
+            const tokenParam = url.searchParams.get('token');
+            if (tokenParam) {
+                const email = await verifySession(tokenParam, env);
+                if (!email) return new Response('Invalid token', { status: 400 });
+                return new Response(null, {
+                    status: 302,
+                    headers: {
+                        Location: '/',
+                        'Set-Cookie': `session=${tokenParam}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_MAXAGE}`
+                    }
+                });
+            }
+
             const code = url.searchParams.get('code');
             if (!code) return new Response('Missing code', { status: 400 });
+            const state = url.searchParams.get('state');
+            const returnTo = state ? await verifyState(state, env).catch(() => null) : null;
+            if (!returnTo) return new Response('Invalid state', { status: 400 });
             const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
                 method: 'POST',
                 body: new URLSearchParams({
                     code,
                     client_id: env.GOOGLE_CLIENT_ID,
                     client_secret: env.GOOGLE_CLIENT_SECRET,
-                    redirect_uri: url.origin + '/oauth/callback',
+                    redirect_uri: env.OAUTH_CALLBACK_URL,
                     grant_type: 'authorization_code'
                 })
             });
@@ -46,8 +67,7 @@ const preAuthRoutes: Route[] = [
             return new Response(null, {
                 status: 302,
                 headers: {
-                    Location: '/',
-                    'Set-Cookie': `session=${jwt}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_MAXAGE}`
+                    Location: `${returnTo}/oauth/callback?token=${encodeURIComponent(jwt)}`
                 }
             });
         }
@@ -299,6 +319,7 @@ const routes: Route[] = [
             const contentMd = data.get('content');
             const dateStr = data.get('date');
             const imageFile = data.get('image');
+            const videoFile = data.get('video');
             if (typeof title !== 'string' || typeof contentMd !== 'string') {
                 return new Response('Invalid form data', { status: 400 });
             }
