@@ -63,6 +63,16 @@ const routes: Route[] = [
     },
     {
         method: 'GET',
+        pattern: /^\/manifest\.webmanifest$/,
+        handler: (request, env) => env.ASSETS.fetch(request)
+    },
+    {
+        method: 'GET',
+        pattern: /^\/bedtime-stories-icon\.png$/,
+        handler: (request, env) => env.ASSETS.fetch(request)
+    },
+    {
+        method: 'GET',
         pattern: /^\/submit(?:\.html|\/)?$/,
         handler: async (request, env, _ctx, _match, _url, auth) => {
             if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });

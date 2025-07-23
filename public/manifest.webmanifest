@@ -1,0 +1,15 @@
+{
+  "name": "Bedtime Stories",
+  "short_name": "Stories",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/bedtime-stories-icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
