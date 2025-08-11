@@ -51,6 +51,11 @@
                 throw err;
             }
         }
+        function toLocalDateString(isoString) {
+            const date = new Date(isoString);
+            date.setMinutes(date.getMinutes() + date.getTimezoneOffset());
+            return date.toLocaleDateString();
+        }
         function App() {
             const [stories, setStories] = useState([]);
             const [page, setPage] = useState(1);
@@ -111,7 +116,7 @@
                     React.createElement('div', { key: s.id, className: 'story-item' }, [
                         React.createElement('span', { key: 't' + s.id }, [
                             s.title,
-                            React.createElement('span', { key: 'd' + s.id, className: 'date' }, ' (' + new Date(s.date).toLocaleDateString() + ')')
+                            React.createElement('span', { key: 'd' + s.id, className: 'date' }, ' (' + toLocalDateString(s.date) + ')')
                         ]),
                         React.createElement('span', { key: 'a' + s.id }, [
                             React.createElement('button', { key: 'v', onClick: () => window.location.href = '/?id=' + s.id }, 'View'),
