@@ -1,6 +1,6 @@
 import { AuthInfo, Env, Route, Story } from './types';
 import { markdownToHtml, easternNowIso } from './utils';
-import { signSession, signState, verifyState, verifySession, SESSION_MAXAGE } from './session';
+import { signSession, signState, verifyState, SESSION_MAXAGE } from './session';
 import { verifyGoogleToken, getAccountRole, requireAuth } from './auth';
 
 // Routes for login flow and OAuth callback
@@ -29,19 +29,6 @@ const preAuthRoutes: Route[] = [
         method: 'GET',
         pattern: /^\/oauth\/callback$/,
         handler: async (_request, env, _ctx, _match, url) => {
-            const tokenParam = url.searchParams.get('token');
-            if (tokenParam) {
-                const email = await verifySession(tokenParam, env);
-                if (!email) return new Response('Invalid token', { status: 400 });
-                return new Response(null, {
-                    status: 302,
-                    headers: {
-                        Location: '/',
-                        'Set-Cookie': `session=${tokenParam}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_MAXAGE}`
-                    }
-                });
-            }
-
             const code = url.searchParams.get('code');
             if (!code) return new Response('Missing code', { status: 400 });
             const state = url.searchParams.get('state');
@@ -67,7 +54,8 @@ const preAuthRoutes: Route[] = [
             return new Response(null, {
                 status: 302,
                 headers: {
-                    Location: `${returnTo}/oauth/callback?token=${encodeURIComponent(jwt)}`
+                    Location: returnTo,
+                    'Set-Cookie': `session=${jwt}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_MAXAGE}`
                 }
             });
         }
