@@ -89,6 +89,7 @@ The worker exposes the following endpoints:
 - `GET /manage` – serves a page to edit or delete stories
 - `GET /images/:key` – returns an image from the `IMAGES` bucket with long-term caching
 - `GET /stories/list` – returns all stories in JSON
+- `GET /stories/calendar?start=YYYY-MM-DD&end=YYYY-MM-DD` – returns days with at least one story between the dates for calendar highlighting
 - `GET /stories` – returns the most recent story not scheduled for the future
 - `GET /stories/:id` – returns a single story
 - `POST /stories` – create a new story (multipart form data, fields: `title`, `content`, `date`, optional `image`)

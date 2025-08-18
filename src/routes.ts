@@ -93,6 +93,35 @@ const routes: Route[] = [
     },
     {
         method: 'GET',
+        pattern: /^\/stories\/calendar$/,
+        handler: async (_request, env, _ctx, _match, url, auth) => {
+            if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
+            try {
+                const startParam = url.searchParams.get('start');
+                const endParam = url.searchParams.get('end');
+                if (!startParam || !endParam) {
+                    return new Response('Missing start or end', { status: 400 });
+                }
+                // Normalize to YYYY-MM-DD strings
+                const startDay = new Date(startParam);
+                const endDay = new Date(endParam);
+                if (isNaN(startDay.getTime()) || isNaN(endDay.getTime())) {
+                    return new Response('Invalid date range', { status: 400 });
+                }
+                const start = startDay.toISOString().substring(0, 10);
+                const end = endDay.toISOString().substring(0, 10);
+                const stmt = env.DB.prepare(
+                    "SELECT substr(date,1,10) as day, COUNT(*) as count FROM stories WHERE substr(date,1,10) BETWEEN ?1 AND ?2 GROUP BY day ORDER BY day"
+                ).bind(start, end);
+                const { results } = await stmt.all<{ day: string; count: number }>();
+                return Response.json({ days: results });
+            } catch {
+                return new Response('Internal Error', { status: 500 });
+            }
+        }
+    },
+    {
+        method: 'GET',
         pattern: /^\/submit(?:\.html|\/)?$/,
         handler: async (request, env, _ctx, _match, _url, auth) => {
             if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });

@@ -46,6 +46,26 @@
             const [videoPreview, setVideoPreview] = useState(null);
             const fileInput = useRef(null);
 
+            // Calendar state
+            const [month, setMonth] = useState(() => { const d = new Date(date); return d.getMonth(); });
+            const [year, setYear] = useState(() => { const d = new Date(date); return d.getFullYear(); });
+            const [daysWithStories, setDaysWithStories] = useState(new Set());
+
+            const pad2 = n => String(n).padStart(2, '0');
+            const ymd = (y, m, d) => `${y}-${pad2(m+1)}-${pad2(d)}`;
+
+            const fetchMonthData = async (y, m) => {
+                const start = ymd(y, m, 1);
+                const last = new Date(y, m + 1, 0).getDate();
+                const end = ymd(y, m, last);
+                const res = await authFetch(`/stories/calendar?start=${start}&end=${end}`);
+                if (!res.ok) return setDaysWithStories(new Set());
+                const data = await res.json();
+                setDaysWithStories(new Set((data.days || []).map(d => d.day)));
+            };
+
+            React.useEffect(() => { fetchMonthData(year, month); }, [year, month]);
+
             const handleFile = file => {
                 if (file) {
                     if (file.type.startsWith('video/')) {
@@ -94,10 +114,55 @@
                 }
             };
 
+            // Simple calendar component (month view)
+            const Calendar = () => {
+                const first = new Date(year, month, 1);
+                const firstWeekday = first.getDay(); // 0=Sun
+                const daysInMonth = new Date(year, month + 1, 0).getDate();
+                const cells = [];
+                for (let i = 0; i < firstWeekday; i++) cells.push(null);
+                for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+                const onPrev = () => {
+                    const d = new Date(year, month, 1); d.setMonth(d.getMonth() - 1);
+                    setYear(d.getFullYear()); setMonth(d.getMonth());
+                };
+                const onNext = () => {
+                    const d = new Date(year, month, 1); d.setMonth(d.getMonth() + 1);
+                    setYear(d.getFullYear()); setMonth(d.getMonth());
+                };
+                const onPick = (d) => { if (!d) return; const v = ymd(year, month, d); setDate(v); };
+                return React.createElement('div', { className: 'calendar' }, [
+                    React.createElement('div', { key: 'hdr', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '0.5rem' } }, [
+                        React.createElement('button', { key: 'p', type: 'button', onClick: onPrev }, '←'),
+                        React.createElement('strong', { key: 'm' }, `${new Date(year, month, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' })}`),
+                        React.createElement('button', { key: 'n', type: 'button', onClick: onNext }, '→')
+                    ]),
+                    React.createElement('div', { key: 'dow', className: 'calendar-grid', style: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginTop: '0.25rem' } },
+                        ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => React.createElement('div', { key: d, style: { textAlign: 'center', fontSize: '0.8rem', color: '#666' } }, d))
+                    ),
+                    React.createElement('div', { key: 'grid', className: 'calendar-grid', style: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px' } },
+                        cells.map((d, i) => {
+                            const isStory = d ? daysWithStories.has(ymd(year, month, d)) : false;
+                            const isSelected = d && ymd(year, month, d) === date;
+                            const style = {
+                                padding: '0.5rem', textAlign: 'center', borderRadius: '6px', cursor: d ? 'pointer' : 'default',
+                                background: isSelected ? '#eef6ff' : 'transparent',
+                                fontWeight: isStory ? '700' : '400',
+                                color: isStory ? '#0a7d00' : '#222',
+                                border: '1px solid #ddd',
+                                opacity: d ? 1 : 0
+                            };
+                            return React.createElement('div', { key: i, style, onClick: () => onPick(d) }, d ? String(d) : '');
+                        })
+                    )
+                ]);
+            };
+
             return React.createElement('form', { onSubmit: submit, onPaste, onDrop, onDragOver }, [
                 React.createElement('h1', { key: 'h' }, 'Add Story'),
                 React.createElement('input', { key: 't', type: 'text', placeholder: 'Title', value: title, required: true, onChange: e => setTitle(e.target.value) }),
-                React.createElement('input', { key: 'd', type: 'date', value: date, required: true, onChange: e => setDate(e.target.value) }),
+                React.createElement('input', { key: 'd', type: 'date', value: date, required: true, onChange: e => { setDate(e.target.value); const d = new Date(e.target.value); if (!isNaN(d)) { setYear(d.getFullYear()); setMonth(d.getMonth()); } } }),
+                React.createElement(Calendar, { key: 'cal' }),
                 React.createElement('textarea', { key: 'c', rows: 10, placeholder: 'Story in Markdown', value: content, required: true, onChange: e => setContent(e.target.value) }),
                 React.createElement('div', { key: 'dz', className: 'drop-zone', onClick: () => fileInput.current && fileInput.current.click() }, imageFile || videoFile ? 'Change file' : 'Click, paste or drop image or video here'),
                 React.createElement('input', { key: 'f', type: 'file', accept: 'image/*,video/mp4', style: { display: 'none' }, ref: fileInput, onChange: e => handleFile(e.target.files[0]) }),
