@@ -17,7 +17,7 @@
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script>
-        const { useState, useRef } = React;
+        const { useState, useRef, useEffect } = React;
 
         async function authFetch(url, options) {
             try {
@@ -45,6 +45,10 @@
             const [preview, setPreview] = useState(null);
             const [videoPreview, setVideoPreview] = useState(null);
             const fileInput = useRef(null);
+            const calendarWrapRef = useRef(null);
+
+            // Calendar dropdown state
+            const [calendarOpen, setCalendarOpen] = useState(false);
 
             // Calendar state
             const [month, setMonth] = useState(() => { const d = new Date(date); return d.getMonth(); });
@@ -65,6 +69,29 @@
             };
 
             React.useEffect(() => { fetchMonthData(year, month); }, [year, month]);
+
+            // Keep month/year in sync with selected date
+            useEffect(() => {
+                const d = new Date(date);
+                if (!isNaN(d)) {
+                    const y = d.getFullYear();
+                    const m = d.getMonth();
+                    if (y !== year || m !== month) { setYear(y); setMonth(m); }
+                }
+            }, [date]);
+
+            // Close calendar when clicking outside
+            useEffect(() => {
+                if (!calendarOpen) return;
+                const onDocClick = (e) => {
+                    if (!calendarWrapRef.current) return;
+                    if (!calendarWrapRef.current.contains(e.target)) {
+                        setCalendarOpen(false);
+                    }
+                };
+                document.addEventListener('mousedown', onDocClick);
+                return () => document.removeEventListener('mousedown', onDocClick);
+            }, [calendarOpen]);
 
             const handleFile = file => {
                 if (file) {
@@ -130,8 +157,13 @@
                     const d = new Date(year, month, 1); d.setMonth(d.getMonth() + 1);
                     setYear(d.getFullYear()); setMonth(d.getMonth());
                 };
-                const onPick = (d) => { if (!d) return; const v = ymd(year, month, d); setDate(v); };
-                return React.createElement('div', { className: 'calendar' }, [
+                const onPick = (d) => {
+                    if (!d) return;
+                    const v = ymd(year, month, d);
+                    setDate(v);
+                    setCalendarOpen(false);
+                };
+                return React.createElement('div', { className: 'calendar', style: { background: 'white', border: '1px solid #ddd', borderRadius: '8px', padding: '8px', boxShadow: '0 6px 24px rgba(0,0,0,0.12)', width: '280px' } }, [
                     React.createElement('div', { key: 'hdr', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '0.5rem' } }, [
                         React.createElement('button', { key: 'p', type: 'button', onClick: onPrev }, '←'),
                         React.createElement('strong', { key: 'm' }, `${new Date(year, month, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' })}`),
@@ -161,8 +193,19 @@
             return React.createElement('form', { onSubmit: submit, onPaste, onDrop, onDragOver }, [
                 React.createElement('h1', { key: 'h' }, 'Add Story'),
                 React.createElement('input', { key: 't', type: 'text', placeholder: 'Title', value: title, required: true, onChange: e => setTitle(e.target.value) }),
-                React.createElement('input', { key: 'd', type: 'date', value: date, required: true, onChange: e => { setDate(e.target.value); const d = new Date(e.target.value); if (!isNaN(d)) { setYear(d.getFullYear()); setMonth(d.getMonth()); } } }),
-                React.createElement(Calendar, { key: 'cal' }),
+                React.createElement('div', { key: 'datewrap', ref: calendarWrapRef, style: { position: 'relative' } }, [
+                    React.createElement('input', {
+                        key: 'd',
+                        type: 'text',
+                        value: date,
+                        required: true,
+                        readOnly: true,
+                        placeholder: 'YYYY-MM-DD',
+                        onClick: () => setCalendarOpen(true),
+                        onFocus: () => setCalendarOpen(true)
+                    }),
+                    calendarOpen ? React.createElement('div', { key: 'popover', style: { position: 'absolute', top: '110%', left: 0, zIndex: 1000 } }, React.createElement(Calendar)) : null
+                ]),
                 React.createElement('textarea', { key: 'c', rows: 10, placeholder: 'Story in Markdown', value: content, required: true, onChange: e => setContent(e.target.value) }),
                 React.createElement('div', { key: 'dz', className: 'drop-zone', onClick: () => fileInput.current && fileInput.current.click() }, imageFile || videoFile ? 'Change file' : 'Click, paste or drop image or video here'),
                 React.createElement('input', { key: 'f', type: 'file', accept: 'image/*,video/mp4', style: { display: 'none' }, ref: fileInput, onChange: e => handleFile(e.target.files[0]) }),
