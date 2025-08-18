@@ -102,21 +102,34 @@ const routes: Route[] = [
                 if (!startParam || !endParam) {
                     return new Response('Missing start or end', { status: 400 });
                 }
-                // Normalize to YYYY-MM-DD strings
+
+                // Parse the incoming dates and normalize to YYYY-MM-DD
                 const startDay = new Date(startParam);
                 const endDay = new Date(endParam);
                 if (isNaN(startDay.getTime()) || isNaN(endDay.getTime())) {
                     return new Response('Invalid date range', { status: 400 });
                 }
-                const start = startDay.toISOString().substring(0, 10);
-                const end = endDay.toISOString().substring(0, 10);
+
+                // Inclusive start of the first day
+                const start = startDay.toISOString().slice(0, 10);
+                // Exclusive end: day AFTER the requested end day
+                const endExclusive = new Date(endDay);
+                endExclusive.setDate(endExclusive.getDate() + 1);
+                const end = endExclusive.toISOString().slice(0, 10);
+
                 const stmt = env.DB.prepare(
-                    "SELECT date as day, COUNT(*) as count FROM stories WHERE date BETWEEN ?1 AND ?2 GROUP BY day ORDER BY day;"
+                    // Keep the same SELECT alias/shape as before for compatibility
+                    "SELECT substr(date,1,10) AS day, COUNT(*) AS count \
+                    FROM stories \
+                    WHERE date >= ?1 AND date < ?2 \
+                    GROUP BY day \
+                    ORDER BY day"
                 ).bind(start, end);
+
                 const { results } = await stmt.all<{ day: string; count: number }>();
                 return Response.json({ days: results });
-            } catch {
-                return new Response('Internal Error', { status: 500 });
+            } catch (err) {
+                return new Response('Server error', { status: 500 });
             }
         }
     },
