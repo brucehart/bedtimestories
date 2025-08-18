@@ -111,7 +111,7 @@ const routes: Route[] = [
                 const start = startDay.toISOString().substring(0, 10);
                 const end = endDay.toISOString().substring(0, 10);
                 const stmt = env.DB.prepare(
-                    "SELECT substr(date,1,10) as day, COUNT(*) as count FROM stories WHERE substr(date,1,10) BETWEEN ?1 AND ?2 GROUP BY day ORDER BY day"
+                    "SELECT date as day, COUNT(*) as count FROM stories WHERE date BETWEEN ?1 AND ?2 GROUP BY day ORDER BY day;"
                 ).bind(start, end);
                 const { results } = await stmt.all<{ day: string; count: number }>();
                 return Response.json({ days: results });
