@@ -1,3 +1,5 @@
+![Bedtime Stories Icon](public/bedtime-stories-icon.png)
+
 # Bedtime Stories
 
 This project is a small [Cloudflare Workers](https://developers.cloudflare.com/workers/) application for managing and serving short stories.  The worker exposes a minimal REST API backed by a D1 database and an R2 bucket for images and serves a React based frontend from the `public` directory.
