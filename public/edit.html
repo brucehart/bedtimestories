@@ -10,6 +10,9 @@
         textarea { width: 100%; font-family: inherit; }
         img { max-width: 100%; border-radius: 8px; }
         .drop-zone { padding: 1rem; border: 2px dashed #ccc; text-align: center; cursor: pointer; }
+        .title-row { display: flex; align-items: center; gap: 0.75rem; }
+        .title-link { padding: 0.3rem 0.75rem; border-radius: 4px; background: #1f7aec; color: #fff; text-decoration: none; font-size: 0.875rem; border: 1px solid transparent; transition: background 0.2s ease; }
+        .title-link:hover { background: #0d5fc0; }
     </style>
 </head>
 <body>
@@ -47,6 +50,7 @@
             const [preview, setPreview] = useState(null);
             const [videoPreview, setVideoPreview] = useState(null);
             const fileInput = useRef(null);
+            const contentRef = useRef(null);
             const calendarWrapRef = useRef(null);
 
             // Calendar dropdown state
@@ -123,7 +127,43 @@
 
             const onPaste = e => {
                 const file = e.clipboardData.files && e.clipboardData.files[0];
-                handleFile(file);
+                if (file) {
+                    e.preventDefault();
+                    handleFile(file);
+                    return;
+                }
+
+                if (e.target && e.target.tagName === 'TEXTAREA') {
+                    const pastedText = e.clipboardData.getData('text');
+                    if (!pastedText) return;
+
+                    const normalized = pastedText.replace(/\r\n/g, '\n');
+                    const withoutLeading = normalized.replace(/^\s*/, '');
+                    if (!withoutLeading.startsWith('Title:')) return;
+
+                    const newlineIndex = withoutLeading.indexOf('\n');
+                    const titleLine = newlineIndex === -1 ? withoutLeading : withoutLeading.slice(0, newlineIndex);
+                    const extractedTitle = titleLine.slice('Title:'.length).trim();
+                    const remainder = newlineIndex === -1 ? '' : withoutLeading.slice(newlineIndex + 1);
+                    const cleanedContent = remainder.replace(/^\s+/, '');
+
+                    const target = e.target;
+                    const { selectionStart, selectionEnd, value: currentValue } = target;
+                    const before = currentValue.slice(0, selectionStart);
+                    const after = currentValue.slice(selectionEnd);
+                    const nextValue = before + cleanedContent + after;
+
+                    e.preventDefault();
+                    setTitle(extractedTitle);
+                    setContent(nextValue);
+
+                    requestAnimationFrame(() => {
+                        if (contentRef.current) {
+                            const cursor = before.length + cleanedContent.length;
+                            contentRef.current.setSelectionRange(cursor, cursor);
+                        }
+                    });
+                }
             };
 
             const onDrop = e => {
@@ -200,7 +240,10 @@
             };
 
             return React.createElement('form', { onSubmit: submit, onPaste, onDrop, onDragOver }, [
-                React.createElement('h1', { key: 'h' }, 'Edit Story'),
+                React.createElement('div', { key: 'hdr', className: 'title-row' }, [
+                    React.createElement('h1', { key: 'h' }, 'Edit Story'),
+                    React.createElement('a', { key: 'link', href: '/manage', className: 'title-link' }, 'Manage Stories')
+                ]),
                 React.createElement('input', { key: 't', type: 'text', placeholder: 'Title', value: title, required: true, onChange: e => setTitle(e.target.value) }),
                 React.createElement('div', { key: 'datewrap', ref: calendarWrapRef, style: { position: 'relative' } }, [
                     React.createElement('input', {
@@ -215,7 +258,7 @@
                     }),
                     calendarOpen ? React.createElement('div', { key: 'popover', style: { position: 'absolute', top: '110%', left: 0, zIndex: 1000 } }, React.createElement(Calendar)) : null
                 ]),
-                React.createElement('textarea', { key: 'c', rows: 10, placeholder: 'Story in Markdown', value: content, required: true, onChange: e => setContent(e.target.value) }),
+                React.createElement('textarea', { key: 'c', rows: 10, placeholder: 'Story in Markdown', value: content, required: true, onChange: e => setContent(e.target.value), ref: contentRef }),
                 React.createElement('div', { key: 'dz', className: 'drop-zone', onClick: () => fileInput.current && fileInput.current.click() }, imageFile || videoFile ? 'Change file' : 'Click, paste or drop image or video here'),
                 React.createElement('input', { key: 'f', type: 'file', accept: 'image/*,video/mp4', style: { display: 'none' }, ref: fileInput, onChange: e => handleFile(e.target.files[0]) }),
                 preview ? React.createElement('img', { key: 'p', src: preview }) : null,
