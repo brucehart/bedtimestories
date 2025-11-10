@@ -19,6 +19,7 @@ export interface Env {
     SESSION_HMAC_KEY: string;
     PUBLIC_VIEW?: string;
     CACHE_REFRESH_TOKEN?: string;
+    CACHE_REFRESH_DAYS?: string;
 }
 
 export interface AuthInfo {
