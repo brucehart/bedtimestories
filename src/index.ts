@@ -3,7 +3,7 @@ import { Env } from './types';
 import { fetchHandler } from './routes';
 export { signSession, verifySession, SESSION_MAXAGE } from './session';
 
-const UPDATE_CACHE_BASE = 'https://bedtimestories';
+const UPDATE_CACHE_BASE = 'https://bedtimestories.bruce-hart.workers.dev';
 
 function buildUpdateCacheRequest(env: Env): Request {
     const daysOverride =
