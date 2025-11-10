@@ -18,6 +18,7 @@ export interface Env {
     OAUTH_CALLBACK_URL: string;
     SESSION_HMAC_KEY: string;
     PUBLIC_VIEW?: string;
+    CACHE_REFRESH_TOKEN?: string;
 }
 
 export interface AuthInfo {
