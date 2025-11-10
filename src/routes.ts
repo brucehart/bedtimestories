@@ -3,8 +3,77 @@ import { markdownToHtml, easternNowIso } from './utils';
 import { signSession, signState, verifyState, verifySession, SESSION_MAXAGE } from './session';
 import { verifyGoogleToken, getAccountRole, requireAuth } from './auth';
 
+const CACHE_REFRESH_DEFAULT_DAYS = 5;
+const CACHE_REFRESH_MAX_DAYS = 30;
+
+async function warmRecentAssets(env: Env, days: number) {
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const { results } = await env.DB.prepare(
+        "SELECT image_url, video_url FROM stories WHERE date >= ?1 ORDER BY date DESC"
+    )
+        .bind(cutoff)
+        .all<{ image_url: string | null; video_url: string | null }>();
+    const assetKeys = new Set<string>();
+    for (const row of results) {
+        if (row.image_url) assetKeys.add(row.image_url);
+        if (row.video_url) assetKeys.add(row.video_url);
+    }
+    const missing: string[] = [];
+    let warmed = 0;
+    for (const key of assetKeys) {
+        try {
+            const object = await env.IMAGES.get(key, { range: { offset: 0, length: 1 } });
+            if (!object) {
+                missing.push(key);
+                continue;
+            }
+            await object.arrayBuffer();
+            warmed++;
+        } catch {
+            missing.push(key);
+        }
+    }
+    return { total: assetKeys.size, warmed, missing };
+}
+
 // Routes for login flow and OAuth callback
 const preAuthRoutes: Route[] = [
+    {
+        method: 'GET',
+        pattern: /^\/update-cache$/,
+        handler: async (request, env, _ctx, _match, url) => {
+            const requiredToken = env.CACHE_REFRESH_TOKEN;
+            if (requiredToken) {
+                const authHeader = request.headers.get('Authorization');
+                if (authHeader !== `Bearer ${requiredToken}`) {
+                    return new Response('Forbidden', { status: 403 });
+                }
+            }
+            const daysParam = url.searchParams.get('days');
+            let days = CACHE_REFRESH_DEFAULT_DAYS;
+            if (daysParam !== null) {
+                const parsed = Number(daysParam);
+                if (!Number.isFinite(parsed) || parsed <= 0) {
+                    return new Response('Invalid days parameter', { status: 400 });
+                }
+                days = Math.min(Math.floor(parsed), CACHE_REFRESH_MAX_DAYS);
+            }
+            try {
+                const result = await warmRecentAssets(env, days);
+                return Response.json(
+                    {
+                        days,
+                        assetsConsidered: result.total,
+                        warmed: result.warmed,
+                        missing: result.missing
+                    },
+                    { headers: { 'Cache-Control': 'no-store' } }
+                );
+            } catch {
+                return new Response('Internal Error', { status: 500 });
+            }
+        }
+    },
     {
         method: 'GET',
         pattern: /^\/login$/,
