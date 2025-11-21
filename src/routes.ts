@@ -6,7 +6,7 @@ import { verifyGoogleToken, getAccountRole, requireAuth } from './auth';
 const CACHE_REFRESH_DEFAULT_DAYS = 5;
 const CACHE_REFRESH_MAX_DAYS = 30;
 
-const CACHE_KEY_PREFIX = 'https://bedtimestories.media';
+const CACHE_KEY_PREFIX = 'https://bedtimestories.bruce-hart.workers.dev';
 
 function buildCacheRequest(path: string): Request {
     return new Request(`${CACHE_KEY_PREFIX}${path}`, { method: 'GET' });
