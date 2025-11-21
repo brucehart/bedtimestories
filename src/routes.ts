@@ -6,6 +6,28 @@ import { verifyGoogleToken, getAccountRole, requireAuth } from './auth';
 const CACHE_REFRESH_DEFAULT_DAYS = 5;
 const CACHE_REFRESH_MAX_DAYS = 30;
 
+const CACHE_KEY_PREFIX = 'https://bedtimestories.bruce-hart.workers.dev';
+
+function buildCacheRequest(path: string): Request {
+    return new Request(`${CACHE_KEY_PREFIX}${path}`, { method: 'GET' });
+}
+
+function buildConditionalHeaders(request: Request): Headers | undefined {
+    const conditionalNames = [
+        'if-match',
+        'if-none-match',
+        'if-modified-since',
+        'if-unmodified-since',
+        'if-range'
+    ];
+    const headers = new Headers();
+    for (const name of conditionalNames) {
+        const value = request.headers.get(name);
+        if (value) headers.set(name, value);
+    }
+    return headers.size > 0 ? headers : undefined;
+}
+
 async function warmRecentAssets(env: Env, days: number) {
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
     const { results } = await env.DB.prepare(
@@ -20,14 +42,21 @@ async function warmRecentAssets(env: Env, days: number) {
     }
     const missing: string[] = [];
     let warmed = 0;
+    const cache = caches.default;
     for (const key of assetKeys) {
         try {
-            const object = await env.IMAGES.get(key, { range: { offset: 0, length: 1 } });
+            const object = await env.IMAGES.get(key);
             if (!object) {
                 missing.push(key);
                 continue;
             }
-            await object.arrayBuffer();
+            const headers = new Headers();
+            object.writeHttpMetadata(headers);
+            headers.set('etag', object.httpEtag);
+            headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+            const cacheReq = buildCacheRequest(`/images/${encodeURIComponent(key)}`);
+            const cacheRes = new Response(object.body, { status: 200, headers });
+            await cache.put(cacheReq, cacheRes);
             warmed++;
         } catch {
             missing.push(key);
@@ -238,16 +267,62 @@ const routes: Route[] = [
     {
         method: 'GET',
         pattern: /^\/images\/(.+)$/,
-        handler: async (_request, env, _ctx, match) => {
+        handler: async (request, env, ctx, match) => {
             const key = decodeURIComponent(match[1]);
+            const { pathname, search } = new URL(request.url);
+            const cacheKey = buildCacheRequest(pathname + search);
+            const isRangeRequest = request.headers.has('range');
+            const cache = caches.default;
+
             try {
-                const obj = await env.IMAGES.get(key);
+                if (!isRangeRequest) {
+                    const cached = await cache.match(cacheKey);
+                    if (cached) return cached;
+                }
+
+                const conditionalHeaders = buildConditionalHeaders(request);
+                const getOptions: R2GetOptions = {};
+                if (isRangeRequest) getOptions.range = request.headers;
+                if (conditionalHeaders) getOptions.onlyIf = conditionalHeaders;
+
+                const obj = await env.IMAGES.get(key, getOptions);
                 if (!obj) return new Response('Not Found', { status: 404 });
+
                 const headers = new Headers();
                 obj.writeHttpMetadata(headers);
                 headers.set('etag', obj.httpEtag);
                 headers.set('Cache-Control', 'public, max-age=31536000, immutable');
-                return new Response(obj.body, { headers });
+                headers.set('Accept-Ranges', 'bytes');
+                headers.set('Content-Length', obj.size.toString());
+
+                let status = 200;
+                if (obj.range) {
+                    const size = obj.size;
+                    // Normalize range values to send back the correct content-range header
+                    let start = 0;
+                    let end = size - 1;
+                    if ('suffix' in obj.range) {
+                        const suffixLength = Math.min(obj.range.suffix, size);
+                        start = Math.max(0, size - suffixLength);
+                        end = size - 1;
+                    } else {
+                        start = obj.range.offset ?? 0;
+                        const length =
+                            obj.range.length !== undefined
+                                ? obj.range.length
+                                : size - start;
+                        end = Math.min(size - 1, start + length - 1);
+                    }
+                    headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
+                    headers.set('Content-Length', (end - start + 1).toString());
+                    status = 206;
+                }
+
+                const response = new Response(obj.body, { status, headers });
+                if (!isRangeRequest && status === 200) {
+                    ctx.waitUntil(cache.put(cacheKey, response.clone()));
+                }
+                return response;
             } catch {
                 return new Response('Internal Error', { status: 500 });
             }
