@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. Release notes with more detail are available in `release-notes/`.
 
+## [v1.0.4] — 2025-11-21
+- Media delivery: add edge caching for `/images/*`, support byte-range/conditional requests, set canonical cache keys, and warm recent assets into `caches.default`.
+- Reliability: scheduled cron now triggers cache warming; `CACHE_REFRESH_DAYS` exposed/configurable.
+- Frontend polish: manage-link and paste-title improvements on the submit page.
+
+See full notes: release-notes/v1.0.4.md
+
 ## [v1.0.3] — 2025-08-29
 - Calendar UX: unified pop‑up calendar with story highlights; calendar API.
 - Manage page: date search; show story date; local timezone display; retrieval aligned to Eastern time.
