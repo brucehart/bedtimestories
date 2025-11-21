@@ -1,6 +1,7 @@
 import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import worker, { signSession, verifySession, SESSION_MAXAGE } from '../src/index';
+import { getAccountRole } from '../src/auth';
 
 interface Story {
     id: number;
@@ -80,17 +81,19 @@ function createDb(accounts: (string | Account)[], stories: Story[]) {
 
 function createImages(store: Record<string, string>) {
     return {
-        async get(key: string) {
+        async get(key: string, _options?: R2GetOptions) {
             const value = store[key];
             if (!value) return null;
+            const encoded = new TextEncoder().encode(value);
             const body = new ReadableStream({
                 start(controller) {
-                    controller.enqueue(new TextEncoder().encode(value));
+                    controller.enqueue(encoded);
                     controller.close();
                 }
             });
             return {
                 body,
+                size: encoded.byteLength,
                 writeHttpMetadata(_h: Headers) {},
                 httpEtag: 'test-etag'
             } as unknown as R2ObjectBody;
@@ -98,17 +101,74 @@ function createImages(store: Record<string, string>) {
     } as unknown as R2Bucket;
 }
 
+function createImagesWithCounter(store: Record<string, string>) {
+    let count = 0;
+    const bucket = {
+        async get(key: string, options?: R2GetOptions) {
+            count++;
+            const value = store[key];
+            if (!value) return null;
+            const encoded = new TextEncoder().encode(value);
+
+            let rangeValue: R2Range | undefined;
+            let slice = encoded;
+
+            if (options?.range instanceof Headers) {
+                const hdr = options.range.get('range');
+                if (hdr?.startsWith('bytes=')) {
+                    const [startStr, endStr] = hdr.replace('bytes=', '').split('-');
+                    const start = Number(startStr);
+                    const end = endStr ? Number(endStr) : encoded.byteLength - 1;
+                    const safeStart = Number.isFinite(start) ? Math.max(0, start) : 0;
+                    const safeEnd = Number.isFinite(end)
+                        ? Math.min(encoded.byteLength - 1, end)
+                        : encoded.byteLength - 1;
+                    slice = encoded.subarray(safeStart, safeEnd + 1);
+                    rangeValue = { offset: safeStart, length: slice.byteLength };
+                }
+            }
+
+            const body = new ReadableStream({
+                start(controller) {
+                    controller.enqueue(slice);
+                    controller.close();
+                }
+            });
+            const obj: any = {
+                body,
+                size: encoded.byteLength,
+                writeHttpMetadata(_h: Headers) {},
+                httpEtag: 'test-etag'
+            };
+            if (rangeValue) obj.range = rangeValue;
+            return obj as R2ObjectBody;
+        }
+    } as unknown as R2Bucket;
+    return { bucket, getCount: () => count };
+}
+
+async function workerFetch(url: string | Request, init?: RequestInit) {
+    const req = url instanceof Request ? url : new Request(url, init);
+    const ctx = createExecutionContext();
+    const resp = await worker.fetch(req, env, ctx);
+    await waitOnExecutionContext(ctx);
+    return resp;
+}
+
 // For now, you'll need to do something like this to get a correctly-typed
 // `Request` to pass to `worker.fetch()`.
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 
 describe('Story page', () => {
-        env.GOOGLE_CLIENT_ID = 'test';
-        env.GOOGLE_CLIENT_SECRET = 'test';
-        env.OAUTH_CALLBACK_URL = 'https://auth.example.com/oauth/callback';
-        env.DB = createDb(['test@example.com'], []);
-        env.IMAGES = createImages({});
-        env.PUBLIC_VIEW = 'false';
+        beforeEach(() => {
+                env.GOOGLE_CLIENT_ID = 'test';
+                env.GOOGLE_CLIENT_SECRET = 'test';
+                env.OAUTH_CALLBACK_URL = 'https://auth.example.com/oauth/callback';
+                env.SESSION_HMAC_KEY = 'test-hmac-key';
+                env.DB = createDb(['test@example.com'], []);
+                env.IMAGES = createImages({});
+                env.PUBLIC_VIEW = 'false';
+        });
 
         it('signs and verifies JWTs', async () => {
                 const jwt = await signSession('alice@example.com', env);
@@ -131,28 +191,28 @@ describe('Story page', () => {
 
         it('serves the story viewer (integration style)', async () => {
                 const jwt = await signSession('test@example.com', env);
-                const response = await SELF.fetch(new Request('https://example.com', { headers: { cookie: `session=${jwt}` } }));
+                const response = await SELF.fetch(new Request('https://example.com', { headers: { cookie: `session=${jwt}` } }), env);
                 const body = await response.text();
                 expect(body).toContain('<div id="root"></div>');
         });
 
         it('serves the submit page', async () => {
                 const jwt = await signSession('test@example.com', env);
-                const response = await SELF.fetch(new Request('https://example.com/submit', { headers: { cookie: `session=${jwt}` } }));
+                const response = await workerFetch('https://example.com/submit', { headers: { cookie: `session=${jwt}` } });
                 const body = await response.text();
                 expect(body).toContain('Add Story');
         });
 
         it('serves the submit page with trailing slash', async () => {
                 const jwt = await signSession('test@example.com', env);
-                const response = await SELF.fetch(new Request('https://example.com/submit/', { headers: { cookie: `session=${jwt}` } }));
+                const response = await workerFetch('https://example.com/submit/', { headers: { cookie: `session=${jwt}` } });
                 const body = await response.text();
                 expect(body).toContain('Add Story');
         });
 
         it('serves the manage page', async () => {
                 const jwt = await signSession('test@example.com', env);
-                const response = await SELF.fetch(new Request('https://example.com/manage', { headers: { cookie: `session=${jwt}` } }));
+                const response = await workerFetch('https://example.com/manage', { headers: { cookie: `session=${jwt}` } });
                 const body = await response.text();
                 expect(body).toContain('Manage Stories');
                 expect(body).toContain('Submit New Story');
@@ -160,7 +220,7 @@ describe('Story page', () => {
 
         it('serves the manage page with trailing slash', async () => {
                 const jwt = await signSession('test@example.com', env);
-                const response = await SELF.fetch(new Request('https://example.com/manage/', { headers: { cookie: `session=${jwt}` } }));
+                const response = await workerFetch('https://example.com/manage/', { headers: { cookie: `session=${jwt}` } });
                 const body = await response.text();
                 expect(body).toContain('Manage Stories');
                 expect(body).toContain('Submit New Story');
@@ -169,7 +229,9 @@ describe('Story page', () => {
         it('denies reader accounts access to editor pages', async () => {
                 env.DB = createDb([{ email: 'reader@example.com', role: 'reader' }], []);
                 const jwt = await signSession('reader@example.com', env);
-                const resp = await SELF.fetch(new Request('https://example.com/submit', { headers: { cookie: `session=${jwt}` } }));
+                expect(await verifySession(jwt, env)).toBe('reader@example.com');
+                expect(await getAccountRole('reader@example.com', env)).toBe('reader');
+                const resp = await workerFetch('https://example.com/submit', { headers: { cookie: `session=${jwt}` } });
                 expect(resp.status).toBe(403);
         });
 
@@ -178,28 +240,28 @@ describe('Story page', () => {
                 const future = { id: 2, title: 'Future', content: '', date: new Date(Date.now() + 86400000).toISOString(), image_url: null, video_url: null, created: null, updated: null };
                 env.DB = createDb(['test@example.com'], [past, future]);
                 const jwt = await signSession('test@example.com', env);
-                const response = await SELF.fetch(new Request('https://example.com/stories', { headers: { cookie: `session=${jwt}` } }));
+                const response = await workerFetch('https://example.com/stories', { headers: { cookie: `session=${jwt}` } });
                 const story = await response.json<any>();
                 expect(story.id).toBe(past.id);
         });
 
         it('allows viewing without login when PUBLIC_VIEW is true', async () => {
                 env.PUBLIC_VIEW = 'true';
-                const response = await SELF.fetch(new Request('https://example.com/'));
+                const response = await workerFetch('https://example.com/');
                 const body = await response.text();
                 expect(body).toContain('<div id="root"></div>');
         });
 
         it('requires login for manage page even when PUBLIC_VIEW is true', async () => {
                 env.PUBLIC_VIEW = 'true';
-                const response = await SELF.fetch(new Request('https://example.com/manage'));
+                const response = await workerFetch(new Request('https://example.com/manage', { redirect: 'manual' }));
                 expect(response.status).toBe(302);
                 expect(response.headers.get('Location')).toBe('/login');
         });
 
         it('requires login for submit page even when PUBLIC_VIEW is true', async () => {
                 env.PUBLIC_VIEW = 'true';
-                const response = await SELF.fetch(new Request('https://example.com/submit'));
+                const response = await workerFetch(new Request('https://example.com/submit', { redirect: 'manual' }));
                 expect(response.status).toBe(302);
                 expect(response.headers.get('Location')).toBe('/login');
         });
@@ -207,15 +269,41 @@ describe('Story page', () => {
         it('serves images from the R2 bucket', async () => {
                 env.IMAGES = createImages({ 'foo.txt': 'hello' });
                 const jwt = await signSession('test@example.com', env);
-                const response = await SELF.fetch(new Request('https://example.com/images/foo.txt', { headers: { cookie: `session=${jwt}` } }));
+                const response = await workerFetch('https://example.com/images/foo.txt', { headers: { cookie: `session=${jwt}` } });
                 expect(await response.text()).toBe('hello');
                 expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable');
+        });
+
+        it('caches media responses in the default cache', async () => {
+                const key = `cached-${Date.now()}`;
+                const { bucket, getCount } = createImagesWithCounter({ [key]: 'hello-cache' });
+                env.IMAGES = bucket;
+                env.PUBLIC_VIEW = 'true';
+                const url = `https://example.com/images/${key}`;
+                const first = await workerFetch(url);
+                expect(await first.text()).toBe('hello-cache');
+                expect(getCount()).toBe(1);
+                const second = await workerFetch(url);
+                expect(await second.text()).toBe('hello-cache');
+                expect(getCount()).toBe(1);
+        });
+
+        it('supports range requests for media', async () => {
+                const key = `range-${Date.now()}`;
+                const { bucket } = createImagesWithCounter({ [key]: 'helloworld' });
+                env.IMAGES = bucket;
+                env.PUBLIC_VIEW = 'true';
+                const response = await workerFetch(new Request(`https://example.com/images/${key}`, { headers: { range: 'bytes=0-3' } }));
+                expect(response.status).toBe(206);
+                expect(response.headers.get('Content-Range')).toBe('bytes 0-3/10');
+                expect(response.headers.get('Accept-Ranges')).toBe('bytes');
+                expect(await response.text()).toBe('hell');
         });
 
         it('allows image access without login when PUBLIC_VIEW is true', async () => {
                 env.PUBLIC_VIEW = 'true';
                 env.IMAGES = createImages({ 'foo.txt': 'world' });
-                const response = await SELF.fetch(new Request('https://example.com/images/foo.txt'));
+                const response = await workerFetch('https://example.com/images/foo.txt');
                 expect(await response.text()).toBe('world');
                 expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable');
         });
