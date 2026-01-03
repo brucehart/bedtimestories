@@ -27,6 +27,27 @@ export function markdownToHtml(md: string): string {
         .join('');
 }
 
+export function unescapeHtml(text: string): string {
+    return text.replace(/&(amp|lt|gt|quot|#39);/g, entity => ({
+        '&amp;': '&',
+        '&lt;': '<',
+        '&gt;': '>',
+        '&quot;': '"',
+        '&#39;': "'"
+    }[entity] as string));
+}
+
+export function htmlToPlainText(html: string): string {
+    const withLineBreaks = html
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>\s*<p>/gi, '\n\n')
+        .replace(/<\/h[1-6]>\s*<h[1-6]>/gi, '\n\n')
+        .replace(/<\/p>/gi, '\n\n')
+        .replace(/<\/h[1-6]>/gi, '\n\n');
+    const stripped = withLineBreaks.replace(/<[^>]+>/g, '');
+    return unescapeHtml(stripped).replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // Parse cookies from a request header
 export function parseCookies(cookieHeader: string | null): Record<string, string> {
     const cookies: Record<string, string> = {};
