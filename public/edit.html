@@ -99,14 +99,19 @@
                 return () => document.removeEventListener('mousedown', onDocClick);
             }, [calendarOpen]);
 
+            const htmlToText = html => {
+                const div = document.createElement('div');
+                div.innerHTML = html || '';
+                return (div.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+            };
+
             useEffect(() => {
                 authFetch('/stories/' + id)
                     .then(res => res.json())
                     .then(data => {
                         setTitle(data.title);
-                        const div = document.createElement('div');
-                        div.innerHTML = data.content;
-                        setContent(div.innerText);
+                        const contentText = typeof data.content_text === 'string' ? data.content_text : htmlToText(data.content);
+                        setContent(contentText);
                         setDate(new Date(data.date).toISOString().substring(0, 10));
                         setPreview(data.image_url ? '/images/' + data.image_url : null);
                         setVideoPreview(data.video_url ? '/images/' + data.video_url : null);
@@ -258,7 +263,7 @@
                     }),
                     calendarOpen ? React.createElement('div', { key: 'popover', style: { position: 'absolute', top: '110%', left: 0, zIndex: 1000 } }, React.createElement(Calendar)) : null
                 ]),
-                React.createElement('textarea', { key: 'c', rows: 10, placeholder: 'Story in Markdown', value: content, required: true, onChange: e => setContent(e.target.value), ref: contentRef }),
+                React.createElement('textarea', { key: 'c', rows: 10, placeholder: 'Story text (no title)', value: content, required: true, onChange: e => setContent(e.target.value), ref: contentRef }),
                 React.createElement('div', { key: 'dz', className: 'drop-zone', onClick: () => fileInput.current && fileInput.current.click() }, imageFile || videoFile ? 'Change file' : 'Click, paste or drop image or video here'),
                 React.createElement('input', { key: 'f', type: 'file', accept: 'image/*,video/mp4', style: { display: 'none' }, ref: fileInput, onChange: e => handleFile(e.target.files[0]) }),
                 preview ? React.createElement('img', { key: 'p', src: preview }) : null,

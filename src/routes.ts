@@ -1,5 +1,5 @@
 import { AuthInfo, Env, Route, Story } from './types';
-import { markdownToHtml, easternNowIso } from './utils';
+import { markdownToHtml, easternNowIso, htmlToPlainText } from './utils';
 import { signSession, signState, verifyState, verifySession, SESSION_MAXAGE } from './session';
 import { verifyGoogleToken, getAccountRole, requireAuth } from './auth';
 
@@ -7,6 +7,16 @@ const CACHE_REFRESH_DEFAULT_DAYS = 5;
 const CACHE_REFRESH_MAX_DAYS = 30;
 
 const CACHE_KEY_PREFIX = 'https://bedtimestories.bruce-hart.workers.dev';
+const STORY_TOKEN_HEADER = 'X-Story-Token';
+
+const CONTENT_TYPE_EXTENSION: Record<string, string> = {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'video/mp4': '.mp4',
+    'video/webm': '.webm',
+    'video/quicktime': '.mov'
+};
 
 function buildCacheRequest(path: string): Request {
     return new Request(`${CACHE_KEY_PREFIX}${path}`, { method: 'GET' });
@@ -26,6 +36,47 @@ function buildConditionalHeaders(request: Request): Headers | undefined {
         if (value) headers.set(name, value);
     }
     return headers.size > 0 ? headers : undefined;
+}
+
+function requireStoryToken(request: Request, env: Env): Response | null {
+    const requiredToken = env.STORY_API_TOKEN;
+    if (!requiredToken) {
+        return new Response('Story API token not configured', { status: 503 });
+    }
+    const providedToken = request.headers.get(STORY_TOKEN_HEADER);
+    if (!providedToken || providedToken !== requiredToken) {
+        return new Response('Unauthorized', { status: 401 });
+    }
+    return null;
+}
+
+function getFileExtension(file: File): string {
+    const name = file.name || '';
+    const dotIndex = name.lastIndexOf('.');
+    if (dotIndex > 0 && dotIndex < name.length - 1) {
+        const ext = name.slice(dotIndex).toLowerCase();
+        if (/^\.[a-z0-9]+$/.test(ext)) return ext;
+    }
+    const contentType = file.type.toLowerCase();
+    return CONTENT_TYPE_EXTENSION[contentType] ?? '';
+}
+
+function normalizeStoryDate(value: string | undefined): string {
+    const trimmed = value?.trim();
+    if (trimmed) {
+        const parsed = new Date(trimmed);
+        if (!Number.isNaN(parsed.getTime())) {
+            return parsed.toISOString();
+        }
+    }
+    return new Date().toISOString();
+}
+
+function withContentText(story: Story) {
+    return {
+        ...story,
+        content_text: htmlToPlainText(story.content)
+    };
 }
 
 async function warmRecentAssets(env: Env, days: number) {
@@ -101,6 +152,141 @@ const preAuthRoutes: Route[] = [
             } catch {
                 return new Response('Internal Error', { status: 500 });
             }
+        }
+    },
+    {
+        method: 'POST',
+        pattern: /^\/api\/media$/,
+        handler: async (request, env) => {
+            const authError = requireStoryToken(request, env);
+            if (authError) return authError;
+            if (!request.headers.get('content-type')?.includes('multipart/form-data')) {
+                return new Response('Expected multipart/form-data', { status: 400 });
+            }
+            const data = await request.formData();
+            const file = data.get('file');
+            if (!(file instanceof File)) {
+                return new Response('Missing file', { status: 400 });
+            }
+            const ext = getFileExtension(file);
+            const key = crypto.randomUUID() + ext;
+            const arrayBuffer = await file.arrayBuffer();
+            await env.IMAGES.put(key, arrayBuffer);
+            return Response.json({ key, url: `/images/${encodeURIComponent(key)}` });
+        }
+    },
+    {
+        method: 'POST',
+        pattern: /^\/api\/stories$/,
+        handler: async (request, env) => {
+            const authError = requireStoryToken(request, env);
+            if (authError) return authError;
+            if (!request.headers.get('content-type')?.includes('application/json')) {
+                return new Response('Expected application/json', { status: 400 });
+            }
+            const payload = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+            if (!payload || typeof payload !== 'object') {
+                return new Response('Invalid JSON payload', { status: 400 });
+            }
+            const title = payload.title;
+            const contentMd = payload.content;
+            const dateStr = payload.date;
+            const imageUrl = payload.image_url;
+            const videoUrl = payload.video_url;
+            if (typeof title !== 'string' || typeof contentMd !== 'string') {
+                return new Response('Invalid story payload', { status: 400 });
+            }
+            const trimmedTitle = title.trim();
+            const trimmedContent = contentMd.trim();
+            if (!trimmedTitle || !trimmedContent) {
+                return new Response('Missing title or content', { status: 400 });
+            }
+            const contentHtml = markdownToHtml(trimmedContent);
+            const dateIso = normalizeStoryDate(typeof dateStr === 'string' ? dateStr : undefined);
+            const imageKey = typeof imageUrl === 'string' && imageUrl.trim() ? imageUrl.trim() : null;
+            const videoKey = typeof videoUrl === 'string' && videoUrl.trim() ? videoUrl.trim() : null;
+            try {
+                const stmt = env.DB.prepare(
+                    'INSERT INTO stories (title, content, date, image_url, video_url, created, updated) VALUES (?1, ?2, ?3, ?4, ?5, datetime(\'now\'), datetime(\'now\'))'
+                ).bind(trimmedTitle, contentHtml, dateIso, imageKey, videoKey);
+                const result = await stmt.run();
+                return Response.json({ id: result.meta.last_row_id });
+            } catch {
+                return new Response('Internal Error', { status: 500 });
+            }
+        }
+    },
+    {
+        method: 'PUT',
+        pattern: /^\/api\/stories\/(\d+)$/,
+        handler: async (request, env, _ctx, match) => {
+            const authError = requireStoryToken(request, env);
+            if (authError) return authError;
+            if (!request.headers.get('content-type')?.includes('application/json')) {
+                return new Response('Expected application/json', { status: 400 });
+            }
+            const id = Number(match[1]);
+            if (!Number.isInteger(id)) {
+                return new Response('Invalid story id', { status: 400 });
+            }
+            const payload = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+            if (!payload || typeof payload !== 'object') {
+                return new Response('Invalid JSON payload', { status: 400 });
+            }
+            const existing = await env.DB.prepare('SELECT * FROM stories WHERE id = ?1').bind(id).first<Story>();
+            if (!existing) {
+                return new Response('Not Found', { status: 404 });
+            }
+
+            const updates: { field: string; value: string | null }[] = [];
+            if ('title' in payload) {
+                if (typeof payload.title !== 'string') return new Response('Invalid title', { status: 400 });
+                const trimmed = payload.title.trim();
+                if (!trimmed) return new Response('Missing title', { status: 400 });
+                updates.push({ field: 'title', value: trimmed });
+            }
+            if ('content' in payload) {
+                if (typeof payload.content !== 'string') return new Response('Invalid content', { status: 400 });
+                const trimmed = payload.content.trim();
+                if (!trimmed) return new Response('Missing content', { status: 400 });
+                updates.push({ field: 'content', value: markdownToHtml(trimmed) });
+            }
+            if ('date' in payload) {
+                if (typeof payload.date !== 'string') return new Response('Invalid date', { status: 400 });
+                updates.push({ field: 'date', value: normalizeStoryDate(payload.date) });
+            }
+            if ('image_url' in payload) {
+                if (payload.image_url !== null && typeof payload.image_url !== 'string') {
+                    return new Response('Invalid image_url', { status: 400 });
+                }
+                const trimmed = typeof payload.image_url === 'string' ? payload.image_url.trim() : '';
+                updates.push({ field: 'image_url', value: trimmed ? trimmed : null });
+            }
+            if ('video_url' in payload) {
+                if (payload.video_url !== null && typeof payload.video_url !== 'string') {
+                    return new Response('Invalid video_url', { status: 400 });
+                }
+                const trimmed = typeof payload.video_url === 'string' ? payload.video_url.trim() : '';
+                updates.push({ field: 'video_url', value: trimmed ? trimmed : null });
+            }
+
+            if (updates.length === 0) {
+                return new Response('No updates provided', { status: 400 });
+            }
+
+            const setParts: string[] = [];
+            const params: (string | number | null)[] = [];
+            for (const update of updates) {
+                setParts.push(`${update.field} = ?${params.length + 1}`);
+                params.push(update.value);
+            }
+            setParts.push("updated = datetime('now')");
+            params.push(id);
+            const stmt = env.DB.prepare(
+                `UPDATE stories SET ${setParts.join(', ')} WHERE id = ?${params.length}`
+            );
+            await stmt.bind(...params).run();
+            return Response.json({ id });
         }
     },
     {
@@ -394,7 +580,7 @@ const routes: Route[] = [
                 if (!story) {
                     return new Response('Not Found', { status: 404 });
                 }
-                return Response.json(story);
+                return Response.json(withContentText(story));
             } catch {
                 return new Response('Internal Error', { status: 500 });
             }
@@ -424,7 +610,7 @@ const routes: Route[] = [
                     if (!story) {
                         return new Response('Not Found', { status: 404 });
                     }
-                    return Response.json(story);
+                    return Response.json(withContentText(story));
                 } catch {
                     return new Response('Internal Error', { status: 500 });
                 }
@@ -436,7 +622,7 @@ const routes: Route[] = [
                 if (!story) {
                     return new Response('Not Found', { status: 404 });
                 }
-                return Response.json(story);
+                return Response.json(withContentText(story));
             } catch {
                 return new Response('Internal Error', { status: 500 });
             }

@@ -249,7 +249,7 @@
                     }),
                     calendarOpen ? React.createElement('div', { key: 'popover', style: { position: 'absolute', top: '110%', left: 0, zIndex: 1000 } }, React.createElement(Calendar)) : null
                 ]),
-                React.createElement('textarea', { key: 'c', rows: 10, placeholder: 'Story in Markdown', value: content, required: true, onChange: e => setContent(e.target.value), ref: contentRef }),
+                React.createElement('textarea', { key: 'c', rows: 10, placeholder: 'Story text (no title)', value: content, required: true, onChange: e => setContent(e.target.value), ref: contentRef }),
                 React.createElement('div', { key: 'dz', className: 'drop-zone', onClick: () => fileInput.current && fileInput.current.click() }, imageFile || videoFile ? 'Change file' : 'Click, paste or drop image or video here'),
                 React.createElement('input', { key: 'f', type: 'file', accept: 'image/*,video/mp4', style: { display: 'none' }, ref: fileInput, onChange: e => handleFile(e.target.files[0]) }),
                 preview ? React.createElement('img', { key: 'p', src: preview }) : null,
