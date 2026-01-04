@@ -43,6 +43,10 @@ The codebase is organized into clearly defined directories and files to separate
     - `manage.html` — admin/management view
     - `submit.html` — story submission form
 
+- **`prompts/`**
+  - Codex prompt templates for automation:
+    - `generate-story.md` — end-to-end workflow for creating stories, media, and storing them
+
 - **`db/`**
   - Contains SQL schema files for D1 database tables:
     - `allowed_accounts_table.sql` — permitted user accounts
@@ -74,6 +78,14 @@ The codebase is organized into clearly defined directories and files to separate
 - **Configuration & metadata:** root files
 
 This modular structure enables clear navigation and division of responsibilities, streamlining development and maintenance for all agents and contributors.
+
+## Story Automation Workflow
+
+- The `/prompts:generate-story` prompt in `prompts/generate-story.md` is the canonical workflow for generating new stories and media.
+- The worker exposes a header-authenticated automation API:
+  - `POST /api/media` accepts `multipart/form-data` with a `file` field and returns an R2 key.
+  - `POST /api/stories` accepts JSON with `title`, `content` (Markdown), optional `date`, and optional `image_url` / `video_url` R2 keys.
+- Authentication uses `X-Story-Token`, validated against `STORY_API_TOKEN` in worker secrets.
 
 ## Coding Conventions for OpenAI Codex
 

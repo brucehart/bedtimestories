@@ -170,3 +170,7 @@ dist
 
 .dev.vars
 .wrangler/
+
+#draft story content for Codex
+story-drafts/
+

@@ -20,6 +20,7 @@ export interface Env {
     PUBLIC_VIEW?: string;
     CACHE_REFRESH_TOKEN?: string;
     CACHE_REFRESH_DAYS?: string;
+    STORY_API_TOKEN?: string;
 }
 
 export interface AuthInfo {

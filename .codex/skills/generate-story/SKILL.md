@@ -1,3 +1,10 @@
+---
+name: generate-story
+description: Draft a new bedtime story.
+metadata:
+  short-description: Draft a new bedtime story.
+---
+
 # Generate Story (Codex)
 
 You will be given:
