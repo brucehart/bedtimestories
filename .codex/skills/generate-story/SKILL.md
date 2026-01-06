@@ -147,9 +147,9 @@ curl -s https://api.replicate.com/v1/models/google/veo-3-fast/predictions \
       "prompt": "YOUR_VIDEO_PROMPT",
       "image": "GENERATED_IMAGE_URL",
       "aspect_ratio": "16:9",
-      "duration": 8,
+      "duration": 4,
       "resolution": "1080p",
-      "generate_audio": false
+      "generate_audio": true
     }
   }'
 ```
@@ -158,7 +158,7 @@ Poll until `status` is `succeeded` and record the `output` URL.
 
 If Veo fails (status `failed` or sensitive content error), fall back to PixVerse:
 - Model: `pixverse/pixverse-v5`
-- Use 8 seconds, normal (effect `None`), 540p.
+- Use 5 seconds, normal (effect `None`), 540p.
 
 Create the PixVerse video prediction:
 ```bash
