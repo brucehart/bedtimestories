@@ -128,7 +128,7 @@ curl -s https://api.replicate.com/v1/models/black-forest-labs/flux-1.1-pro/predi
 ```
 
 ## Step 3: Generate a short video (Replicate)
-Primary model: `google/veo-3-fast`
+Primary model: `pixverse/pixverse-v5`
 
 Video requirements:
 - 16:9 landscape.
@@ -136,28 +136,6 @@ Video requirements:
 - No text or letters.
 - Use the generated image as the `image` input for consistency.
 - Use the story to build a concise scene prompt.
-
-Create the video prediction:
-```bash
-curl -s https://api.replicate.com/v1/models/google/veo-3-fast/predictions \
-  -H "Authorization: Token $REPLICATE_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "input": {
-      "prompt": "YOUR_VIDEO_PROMPT",
-      "image": "GENERATED_IMAGE_URL",
-      "aspect_ratio": "16:9",
-      "duration": 4,
-      "resolution": "1080p",
-      "generate_audio": true
-    }
-  }'
-```
-
-Poll until `status` is `succeeded` and record the `output` URL.
-
-If Veo fails (status `failed` or sensitive content error), fall back to PixVerse:
-- Model: `pixverse/pixverse-v5`
 - Use 5 seconds, normal (effect `None`), 540p.
 
 Create the PixVerse video prediction:
@@ -170,7 +148,7 @@ curl -s https://api.replicate.com/v1/models/pixverse/pixverse-v5/predictions \
       "prompt": "YOUR_VIDEO_PROMPT",
       "image": "GENERATED_IMAGE_URL",
       "aspect_ratio": "16:9",
-      "duration": 8,
+      "duration": 5,
       "quality": "540p",
       "effect": "None"
     }
@@ -183,6 +161,14 @@ Download the generated assets locally before uploading:
 ```bash
 curl -L "IMAGE_OUTPUT_URL" -o /tmp/story-image.jpg
 curl -L "VIDEO_OUTPUT_URL" -o /tmp/story-video.mp4
+```
+
+Re-encode the video for iPhone compatibility before uploading:
+```bash
+ffmpeg -y -i /tmp/story-video.mp4 \
+  -c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p \
+  -c:a aac -b:a 128k -movflags +faststart \
+  /tmp/story-video-encoded.mp4
 ```
 
 ## Step 4: Upload media to R2 via worker API
@@ -201,7 +187,7 @@ Upload video:
 ```bash
 curl -s "$STORY_API_BASE_URL/api/media" \
   -H "X-Story-Token: $STORY_API_TOKEN" \
-  -F "file=@/path/to/video.mp4"
+  -F "file=@/tmp/story-video-encoded.mp4"
 ```
 
 Each response returns `{ "key": "..." }`. Keep those keys.
