@@ -22,7 +22,31 @@ Use the following workflow exactly.
 ## Step 0: Resolve story date
 1) If the folder name contains a `YYYY-MM-DD` date, use that.
 2) Else if the markdown file name contains a `YYYY-MM-DD` date, use that.
-3) Else use the current date in `YYYY-MM-DD`.
+3) Else find the next date (including today) that does not already have a story:
+   - Use the story API token to query existing story days.
+   - Fetch a range starting today through today + 365 days (extend the range if needed).
+   - Pick the earliest date in that range that is not present in the calendar data.
+
+Example:
+```bash
+START=$(date -u +%Y-%m-%d)
+END=$(date -u -d "+365 days" +%Y-%m-%d)
+curl -s "https://bedtimestories.bruce-hart.workers.dev/api/stories/calendar?start=$START&end=$END" \
+  -H "X-Story-Token: $STORY_API_TOKEN"
+```
+The response includes `{ "days": [ { "day": "YYYY-MM-DD", "count": N }, ... ] }`.
+Choose the first date starting at `START` that is missing from the `days` list.
+
+Helper script:
+```bash
+STORY_API_TOKEN=... \
+STORY_API_BASE_URL=https://bedtimestories.bruce-hart.workers.dev \
+/mnt/c/Users/admin/Documents/Code/bedtimestories/.codex/skills/generate-story/scripts/next-open-date.py
+```
+Environment variables:
+- `STORY_API_TOKEN` (required): story automation API token.
+- `STORY_API_BASE_URL` (optional): defaults to `https://bedtimestories.bruce-hart.workers.dev`.
+- `STORY_CALENDAR_DAYS` (optional): number of days to scan per request (default 365).
 
 ## Step 1: Write the story text (Markdown)
 Follow these instructions exactly:
