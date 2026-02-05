@@ -13,19 +13,38 @@ def save_binary_file(file_name, data):
         f.write(data)
 
 
-def generate(prompt: str) -> str:
+def load_image_parts(image_paths):
+    parts = []
+    for path in image_paths:
+        if not os.path.exists(path):
+            raise SystemExit(f"Reference image not found: {path}")
+        mime_type, _ = mimetypes.guess_type(path)
+        with open(path, "rb") as f:
+            data = f.read()
+        parts.append(
+            types.Part.from_bytes(
+                data=data,
+                mime_type=mime_type or "image/jpeg",
+            )
+        )
+    return parts
+
+
+def generate(prompt: str, image_paths) -> str:
     client = genai.Client(
         api_key=os.environ.get("GEMINI_API_KEY"),
     )
 
     model = "gemini-3-pro-image-preview"
     full_prompt = f"{prompt}. {DEFAULT_SUFFIX}"
+    image_parts = load_image_parts(image_paths) if image_paths else []
 
     contents = [
         types.Content(
             role="user",
             parts=[
                 types.Part.from_text(text=full_prompt),
+                *image_parts,
             ],
         ),
     ]
@@ -77,9 +96,15 @@ def generate(prompt: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Generate a story cover image.")
+    parser.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        help="Path to a reference image (repeatable).",
+    )
     parser.add_argument("prompt", help="Image prompt for the story cover.")
     args = parser.parse_args()
-    generate(args.prompt)
+    generate(args.prompt, args.image)
 
 
 if __name__ == "__main__":

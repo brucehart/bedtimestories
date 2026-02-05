@@ -106,9 +106,13 @@ Install dependency:
 pip install google-genai
 ```
 
-Generate and save the image locally (example):
+If reference images are available, pass one or more with repeated `--image` flags.
+
+Generate and save the image locally (example with optional reference images):
 ```bash
 IMAGE_PATH=$(python /mnt/c/Users/admin/Documents/Code/bedtimestories/.codex/skills/generate-story/scripts/generate-image.py \
+  --image "/path/to/reference-1.jpg" \
+  --image "/path/to/reference-2.png" \
   "YOUR_IMAGE_PROMPT")
 ```
 
