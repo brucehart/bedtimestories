@@ -5,9 +5,11 @@ import os
 import sys
 import urllib.parse
 import urllib.request
+from zoneinfo import ZoneInfo
 
 DEFAULT_BASE_URL = "https://bedtimestories.bruce-hart.workers.dev"
 DEFAULT_RANGE_DAYS = 365
+DEFAULT_TZ = "America/New_York"
 
 
 def read_env_int(name: str, default: int) -> int:
@@ -56,7 +58,13 @@ def fetch_calendar_days(base_url: str, start: datetime.date, end: datetime.date,
 
 
 def find_next_open_date(base_url: str, story_token: str, range_days: int) -> datetime.date:
-    start = datetime.datetime.utcnow().date()
+    tz_name = os.getenv("STORY_TIMEZONE", DEFAULT_TZ)
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        print(f"Invalid STORY_TIMEZONE: {tz_name}", file=sys.stderr)
+        sys.exit(1)
+    start = datetime.datetime.now(tz=tz).date()
     while True:
         end = start + datetime.timedelta(days=range_days)
         taken = fetch_calendar_days(base_url, start, end, story_token)

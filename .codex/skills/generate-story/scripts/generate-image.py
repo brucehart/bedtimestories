@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 import argparse
+import json
 import mimetypes
 import os
+import sys
 import uuid
 from google import genai
 from google.genai import types
@@ -11,6 +13,9 @@ DEFAULT_SUFFIX = "16:9 landscape, 1K resolution, cartoon style, no text or lette
 def save_binary_file(file_name, data):
     with open(file_name, "wb") as f:
         f.write(data)
+
+def log(msg: str) -> None:
+    print(msg, file=sys.stderr)
 
 
 def load_image_parts(image_paths):
@@ -31,8 +36,14 @@ def load_image_parts(image_paths):
 
 
 def generate(prompt: str, image_paths) -> str:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise SystemExit(
+            "GEMINI_API_KEY is required (export it in the current environment; dotfiles may not be sourced)."
+        )
+
     client = genai.Client(
-        api_key=os.environ.get("GEMINI_API_KEY"),
+        api_key=api_key,
     )
 
     model = "gemini-3-pro-image-preview"
@@ -73,24 +84,27 @@ def generate(prompt: str, image_paths) -> str:
             or chunk.candidates[0].content.parts is None
         ):
             continue
-        part = chunk.candidates[0].content.parts[0]
-        if part.inline_data and part.inline_data.data:
-            file_name = f"/tmp/story-image-{run_id}-{file_index}"
-            file_index += 1
-            inline_data = part.inline_data
-            data_buffer = inline_data.data
-            file_extension = mimetypes.guess_extension(inline_data.mime_type)
-            saved_path = f"{file_name}{file_extension}"
-            save_binary_file(saved_path, data_buffer)
+        parts = chunk.candidates[0].content.parts
+        # The model may stream text and image parts in different orders; scan for the first image payload.
+        for part in parts:
+            if part.inline_data and part.inline_data.data:
+                file_name = f"/tmp/story-image-{run_id}-{file_index}"
+                file_index += 1
+                inline_data = part.inline_data
+                data_buffer = inline_data.data
+                file_extension = mimetypes.guess_extension(inline_data.mime_type)
+                saved_path = f"{file_name}{file_extension}"
+                save_binary_file(saved_path, data_buffer)
+                break
+        if saved_path:
             break
-        else:
-            if chunk.text:
-                print(chunk.text)
+        if chunk.text:
+            # Streaming responses may contain text; keep stdout reserved for the final path/JSON.
+            log(chunk.text)
 
     if not saved_path:
         raise SystemExit("No image data was returned by the model.")
 
-    print(saved_path)
     return saved_path
 
 
@@ -102,9 +116,18 @@ def main():
         default=[],
         help="Path to a reference image (repeatable).",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a single JSON object to stdout instead of the raw path.",
+    )
     parser.add_argument("prompt", help="Image prompt for the story cover.")
     args = parser.parse_args()
-    generate(args.prompt, args.image)
+    path = generate(args.prompt, args.image)
+    if args.json:
+        print(json.dumps({"path": path, "model": "gemini-3-pro-image-preview"}))
+    else:
+        print(path)
 
 
 if __name__ == "__main__":

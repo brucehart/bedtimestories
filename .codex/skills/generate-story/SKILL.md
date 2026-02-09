@@ -13,7 +13,7 @@ You will be given:
 - Optionally a markdown file name that may include a date.
 
 Required environment variables:
-- `GEMINI_API_KEY` for Google Vertex (Gemini).
+- `GEMINI_API_KEY` for Google Vertex (Gemini). Must be exported in the current environment (dotfiles may not be sourced).
 - `STORY_API_TOKEN` for the worker automation API.
 - `STORY_API_BASE_URL` (optional). If not set, use `https://bedtimestories.bruce-hart.workers.dev`.
 
@@ -25,6 +25,15 @@ source ~/scripts/.venv/bin/activate
 Use the following workflow exactly.
 
 The image script prints the generated image path so it can be passed to the video script.
+
+## Preflight (fail fast)
+Before doing anything else, verify the required env vars exist in the *current* shell environment:
+```bash
+python -c 'import os; assert os.getenv("GEMINI_API_KEY"), "GEMINI_API_KEY missing"'
+python -c 'import os; assert os.getenv("STORY_API_TOKEN"), "STORY_API_TOKEN missing"'
+command -v ffmpeg >/dev/null
+command -v curl >/dev/null
+```
 
 ## Step 0: Resolve story date
 1) If the folder name contains a `YYYY-MM-DD` date, use that.
@@ -54,8 +63,9 @@ Environment variables:
 - `STORY_API_TOKEN` (required): story automation API token.
 - `STORY_API_BASE_URL` (optional): defaults to `https://bedtimestories.bruce-hart.workers.dev`.
 - `STORY_CALENDAR_DAYS` (optional): number of days to scan per request (default 365).
+- `STORY_TIMEZONE` (optional): timezone used to interpret "today" (default `America/New_York`).
 
-## Step 1: Write the story text (Markdown)
+## Step 1: Write the story text (Markdown-compatible plain text)
 Follow these instructions exactly:
 
 For the given prompt, write a bedtime story including a title for my six year old son James. Make the text simple and phonics friendly for a beginning reader. Return the title separately and do not include it in the story content.
@@ -85,10 +95,24 @@ Grandpa Rick is bald, clean shaven and wears glasses.
 Trixie is a black cat with short legs, white paws, black chin, black face and a white chest.
 
 Story format requirements:
-- Plain text only (no Markdown).
+- Plain text paragraphs only. (Plain text with blank lines is valid Markdown; do not use Markdown formatting like headings/lists.)
 - Do not include the title in the story content.
 - Use short paragraphs separated by blank lines.
 - Keep sentences short and easy to read.
+
+## Recommended: One-command run (Steps 0,2,3,4,5)
+After you have the title and story content, put the content in a file (example: `/tmp/story.txt`) and run:
+```bash
+source ~/scripts/.venv/bin/activate
+python /mnt/c/Users/admin/Documents/Code/bedtimestories/.codex/skills/generate-story/scripts/run-generate-story.py \
+  --title "TITLE" \
+  --content-file /tmp/story.txt
+```
+Optional flags:
+- `--date YYYY-MM-DD` to force a specific date instead of auto-selecting next open date.
+- `--ref-image /path/to.jpg` (repeatable) to guide the cover image with reference photos.
+- `--image-prompt "..."` / `--video-prompt "..."` to override the default media prompts.
+- `--json` to print a single JSON object to stdout.
 
 ## Step 2: Generate a cover image (Google Vertex Gemini)
 Model: `gemini-3-pro-image-preview`
@@ -183,7 +207,7 @@ curl -s "$STORY_API_BASE_URL/api/stories" \
   -H "Content-Type: application/json" \
   -d '{
     "title": "TITLE",
-    "content": "MARKDOWN_STORY",
+    "content": "STORY_CONTENT",
     "date": "YYYY-MM-DD",
     "image_url": "IMAGE_KEY",
     "video_url": "VIDEO_KEY"
