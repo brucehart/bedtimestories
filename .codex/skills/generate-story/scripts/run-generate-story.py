@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -78,6 +79,49 @@ def read_text(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
+def story_fingerprint(title: str, content: str) -> str:
+    # Stable, short identifier used only for debugging/prompt grounding.
+    h = hashlib.sha256()
+    h.update(title.strip().encode("utf-8"))
+    h.update(b"\n---\n")
+    h.update(content.strip().encode("utf-8"))
+    return h.hexdigest()[:12]
+
+
+def compact_story_excerpt(content: str, max_chars: int = 700) -> str:
+    text = " ".join(content.strip().split())
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
+
+def default_image_prompt(title: str, content: str) -> str:
+    excerpt = compact_story_excerpt(content)
+    fp = story_fingerprint(title, content)
+    return (
+        "Cozy bedtime-story cartoon cover illustration (landscape). "
+        "Depict ONE key moment from this story, with a warm, gentle mood. "
+        "Use only the characters that belong in that moment (no extra people/animals). "
+        "No text, letters, signage, logos, or watermarks. "
+        f"Story title: {title}. "
+        f"Story excerpt: {excerpt} "
+        f"(story id tag: {fp})."
+    )
+
+
+def default_video_prompt(title: str, content: str) -> str:
+    excerpt = compact_story_excerpt(content)
+    fp = story_fingerprint(title, content)
+    return (
+        "Cartoon 8-second scene (landscape) showing ONE gentle moment from this story. "
+        "Slow, steady camera movement, warm lighting, family-friendly. "
+        "Match the cover image style and characters; do not add characters not present in the moment. "
+        "No text, letters, signage, logos, or watermarks. "
+        f"Story title: {title}. "
+        f"Story excerpt: {excerpt} "
+        f"(story id tag: {fp})."
+    )
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -90,6 +134,11 @@ def main() -> int:
         help="Path to the story content file (plain text / markdown-compatible).",
     )
     parser.add_argument("--date", help="Story date (YYYY-MM-DD). If omitted, finds next open date.")
+    parser.add_argument(
+        "--story-id",
+        type=int,
+        help="If set, updates an existing story's media (image_url/video_url) instead of creating a new story.",
+    )
     parser.add_argument("--base-url", help="Story API base URL.")
     parser.add_argument("--poll-seconds", type=int, default=10, help="Polling interval for video generation.")
     parser.add_argument(
@@ -122,8 +171,14 @@ def main() -> int:
     video_script = os.path.join(scripts_dir, "generate-video.py")
     next_date_script = os.path.join(scripts_dir, "next-open-date.py")
 
+    content = read_text(args.content_file)
+
+    # Safe defaults are derived from the provided title/content so we don't accidentally reuse an old story theme.
+    image_prompt = args.image_prompt or default_image_prompt(args.title, content)
+    video_prompt = args.video_prompt or default_video_prompt(args.title, content)
+
     date = args.date
-    if not date:
+    if not date and not args.story_id:
         proc = subprocess.run(
             [sys.executable, next_date_script],
             stdout=subprocess.PIPE,
@@ -134,20 +189,6 @@ def main() -> int:
         if proc.returncode != 0:
             return proc.returncode
         date = proc.stdout.strip()
-
-    content = read_text(args.content_file)
-
-    # Prompts are intentionally simple: keep them user-supplied by editing SKILL.md or calling scripts directly.
-    # Here we just provide safe defaults.
-    image_prompt = args.image_prompt or (
-        "Cozy bedtime-story cartoon cover. A warm, happy family moment with James, Mom, Dad, Grace, and Trixie. "
-        "Basement Super Bowl party with pizza and wings on a table. No text, letters, signage, logos."
-    )
-    video_prompt = args.video_prompt or (
-        "Cartoon 8-second scene in a cozy basement during a football watch party. James and Dad cheer softly on the couch, "
-        "Mom smiles, Grace claps and giggles, Trixie rolls on the rug near the coffee table with pizza and wings. "
-        "Gentle camera pan, warm lighting, family-friendly, no text or letters."
-    )
 
     image_cmd = [sys.executable, image_script, "--json"]
     for ref in args.ref_image:
@@ -219,31 +260,53 @@ def main() -> int:
     if not image_key or not video_key:
         raise SystemExit("Upload did not return media keys.")
 
-    payload = {
-        "title": args.title,
-        "content": content,
-        "date": date,
-        "image_url": image_key,
-        "video_url": video_key,
-    }
+    payload: dict[str, object] = {}
+    if args.story_id:
+        # Update media only by default. This prevents accidental content/date edits.
+        payload["image_url"] = image_key
+        payload["video_url"] = video_key
+    else:
+        payload = {
+            "title": args.title,
+            "content": content,
+            "date": date,
+            "image_url": image_key,
+            "video_url": video_key,
+        }
     payload_path = tempfile.mktemp(prefix="story-payload-", suffix=".json", dir="/tmp")
     with open(payload_path, "w", encoding="utf-8") as f:
         json.dump(payload, f)
 
-    story_create = curl_json(
-        [
-            f"{base_url}/api/stories",
-            "-H",
-            f"X-Story-Token: {story_token}",
-            "-H",
-            "Content-Type: application/json",
-            "--data-binary",
-            f"@{payload_path}",
-        ]
-    )
-    story_id = story_create.get("id")
-    if not story_id:
-        raise SystemExit(f"Story create did not return id: {story_create}")
+    if args.story_id:
+        story_update = curl_json(
+            [
+                f"{base_url}/api/stories/{args.story_id}",
+                "-X",
+                "PUT",
+                "-H",
+                f"X-Story-Token: {story_token}",
+                "-H",
+                "Content-Type: application/json",
+                "--data-binary",
+                f"@{payload_path}",
+            ]
+        )
+        story_id = story_update.get("id") or args.story_id
+    else:
+        story_create = curl_json(
+            [
+                f"{base_url}/api/stories",
+                "-H",
+                f"X-Story-Token: {story_token}",
+                "-H",
+                "Content-Type: application/json",
+                "--data-binary",
+                f"@{payload_path}",
+            ]
+        )
+        story_id = story_create.get("id")
+        if not story_id:
+            raise SystemExit(f"Story create did not return id: {story_create}")
 
     if not args.keep_tmp:
         for p in (payload_path, encoded_path):

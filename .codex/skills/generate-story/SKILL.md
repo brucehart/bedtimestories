@@ -57,7 +57,7 @@ Helper script:
 ```bash
 STORY_API_TOKEN=... \
 STORY_API_BASE_URL=https://bedtimestories.bruce-hart.workers.dev \
-/mnt/c/Users/admin/Documents/Code/bedtimestories/.codex/skills/generate-story/scripts/next-open-date.py
+python .codex/skills/generate-story/scripts/next-open-date.py
 ```
 Environment variables:
 - `STORY_API_TOKEN` (required): story automation API token.
@@ -104,12 +104,13 @@ Story format requirements:
 After you have the title and story content, put the content in a file (example: `/tmp/story.txt`) and run:
 ```bash
 source ~/scripts/.venv/bin/activate
-python /mnt/c/Users/admin/Documents/Code/bedtimestories/.codex/skills/generate-story/scripts/run-generate-story.py \
+python .codex/skills/generate-story/scripts/run-generate-story.py \
   --title "TITLE" \
   --content-file /tmp/story.txt
 ```
 Optional flags:
 - `--date YYYY-MM-DD` to force a specific date instead of auto-selecting next open date.
+- `--story-id ID` to update an existing story's `image_url`/`video_url` (regenerates media, uploads it, then `PUT`s the keys).
 - `--ref-image /path/to.jpg` (repeatable) to guide the cover image with reference photos.
 - `--image-prompt "..."` / `--video-prompt "..."` to override the default media prompts.
 - `--json` to print a single JSON object to stdout.
@@ -125,6 +126,8 @@ Image requirements:
 - Only include characters relevant to the selected scene.
 - Incorporate reference images as guidance when available (describe them in the prompt).
 
+Note: `run-generate-story.py` derives safe default image/video prompts from the provided `--title` and `--content-file` so it doesn't accidentally reuse a previous story theme. You can still override prompts explicitly with `--image-prompt` / `--video-prompt`.
+
 Install dependency:
 ```bash
 pip install google-genai
@@ -134,7 +137,7 @@ If reference images are available, pass one or more with repeated `--image` flag
 
 Generate and save the image locally (example with optional reference images):
 ```bash
-IMAGE_PATH=$(python /mnt/c/Users/admin/Documents/Code/bedtimestories/.codex/skills/generate-story/scripts/generate-image.py \
+IMAGE_PATH=$(python .codex/skills/generate-story/scripts/generate-image.py \
   --image "/path/to/reference-1.jpg" \
   --image "/path/to/reference-2.png" \
   "YOUR_IMAGE_PROMPT")
@@ -163,7 +166,7 @@ pip install google-genai pillow
 
 Generate and save the video locally (example):
 ```bash
-VIDEO_PATH=$(python /mnt/c/Users/admin/Documents/Code/bedtimestories/.codex/skills/generate-story/scripts/generate-video.py \
+VIDEO_PATH=$(python .codex/skills/generate-story/scripts/generate-video.py \
   "$IMAGE_PATH" \
   "YOUR_VIDEO_PROMPT")
 ```

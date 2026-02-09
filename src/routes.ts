@@ -279,6 +279,8 @@ const preAuthRoutes: Route[] = [
             }
 
             const updates: { field: string; value: string | null }[] = [];
+            let nextImageUrl: string | null | undefined;
+            let nextVideoUrl: string | null | undefined;
             if ('title' in payload) {
                 if (typeof payload.title !== 'string') return new Response('Invalid title', { status: 400 });
                 const trimmed = payload.title.trim();
@@ -300,14 +302,16 @@ const preAuthRoutes: Route[] = [
                     return new Response('Invalid image_url', { status: 400 });
                 }
                 const trimmed = typeof payload.image_url === 'string' ? payload.image_url.trim() : '';
-                updates.push({ field: 'image_url', value: trimmed ? trimmed : null });
+                nextImageUrl = trimmed ? trimmed : null;
+                updates.push({ field: 'image_url', value: nextImageUrl });
             }
             if ('video_url' in payload) {
                 if (payload.video_url !== null && typeof payload.video_url !== 'string') {
                     return new Response('Invalid video_url', { status: 400 });
                 }
                 const trimmed = typeof payload.video_url === 'string' ? payload.video_url.trim() : '';
-                updates.push({ field: 'video_url', value: trimmed ? trimmed : null });
+                nextVideoUrl = trimmed ? trimmed : null;
+                updates.push({ field: 'video_url', value: nextVideoUrl });
             }
 
             if (updates.length === 0) {
@@ -326,6 +330,24 @@ const preAuthRoutes: Route[] = [
                 `UPDATE stories SET ${setParts.join(', ')} WHERE id = ?${params.length}`
             );
             await stmt.bind(...params).run();
+
+            // Best-effort cleanup: if media keys changed, delete the old objects from R2 to prevent orphans.
+            // (No-op if the object doesn't exist or delete fails.)
+            try {
+                if (nextImageUrl !== undefined && existing.image_url && existing.image_url !== nextImageUrl) {
+                    await env.IMAGES.delete(existing.image_url);
+                }
+            } catch {
+                // ignore
+            }
+            try {
+                if (nextVideoUrl !== undefined && existing.video_url && existing.video_url !== nextVideoUrl) {
+                    await env.IMAGES.delete(existing.video_url);
+                }
+            } catch {
+                // ignore
+            }
+
             return Response.json({ id });
         }
     },
