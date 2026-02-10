@@ -2,6 +2,7 @@ import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloud
 import { describe, it, expect, beforeEach } from 'vitest';
 import worker, { signSession, verifySession, SESSION_MAXAGE } from '../src/index';
 import { getAccountRole } from '../src/auth';
+import { signState } from '../src/session';
 
 interface Story {
     id: number;
@@ -68,6 +69,12 @@ function createDb(accounts: (string | Account)[], stories: Story[]) {
                                 return (stories.find(s => s.id === id) ?? null) as T;
                             }
                             return null as T;
+                        },
+                        async all<T>() {
+                            return { results: stories as T[] };
+                        },
+                        async run() {
+                            return { meta: { last_row_id: 1 } };
                         }
                     };
                 },
@@ -99,6 +106,16 @@ function createImages(store: Record<string, string>) {
             } as unknown as R2ObjectBody;
         }
     } as unknown as R2Bucket;
+}
+
+function createImagesPutSpy() {
+    let lastPut: { key: string; value: unknown; options?: unknown } | null = null;
+    const bucket = {
+        async put(key: string, value: unknown, options?: unknown) {
+            lastPut = { key, value, options };
+        }
+    } as unknown as R2Bucket;
+    return { bucket, getLastPut: () => lastPut };
 }
 
 function createImagesWithCounter(store: Record<string, string>) {
@@ -187,6 +204,8 @@ describe('Story page', () => {
                 await waitOnExecutionContext(ctx);
                 const body = await response.text();
                 expect(body).toContain('<div id="root"></div>');
+                expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+                expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
         });
 
         it('serves the story viewer (integration style)', async () => {
@@ -216,6 +235,8 @@ describe('Story page', () => {
                 const body = await response.text();
                 expect(body).toContain('Manage Stories');
                 expect(body).toContain('Submit New Story');
+                expect(response.headers.get('Cache-Control')).toBe('no-store');
+                expect(response.headers.get('X-Frame-Options')).toBe('DENY');
         });
 
         it('serves the manage page with trailing slash', async () => {
@@ -272,6 +293,7 @@ describe('Story page', () => {
                 const response = await workerFetch('https://example.com/images/foo.txt', { headers: { cookie: `session=${jwt}` } });
                 expect(await response.text()).toBe('hello');
                 expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable');
+                expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
         });
 
         it('caches media responses in the default cache', async () => {
@@ -306,5 +328,109 @@ describe('Story page', () => {
                 const response = await workerFetch('https://example.com/images/foo.txt');
                 expect(await response.text()).toBe('world');
                 expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable');
+        });
+
+        it('rejects malformed percent-encoding in image keys', async () => {
+                env.PUBLIC_VIEW = 'true';
+                env.IMAGES = createImages({ });
+                const response = await workerFetch('https://example.com/images/%E0%A4%A');
+                expect(response.status).toBe(400);
+        });
+
+        it('rejects invalid image key characters', async () => {
+                env.PUBLIC_VIEW = 'true';
+                env.IMAGES = createImages({ });
+                // Avoid URL path normalization of ".." segments by encoding slashes.
+                const response = await workerFetch('https://example.com/images/..%2F..%2Fetc%2Fpasswd');
+                expect(response.status).toBe(400);
+        });
+
+        it('locks down /update-cache when token is not configured', async () => {
+                delete (env as any).CACHE_REFRESH_TOKEN;
+                const response = await workerFetch('https://example.com/update-cache');
+                expect(response.status).toBe(503);
+        });
+
+        it('requires bearer auth for /update-cache when token is configured', async () => {
+                env.CACHE_REFRESH_TOKEN = 'cache-token';
+                let response = await workerFetch('https://example.com/update-cache');
+                expect(response.status).toBe(403);
+                response = await workerFetch('https://example.com/update-cache', { headers: { Authorization: 'Bearer wrong' } });
+                expect(response.status).toBe(403);
+                response = await workerFetch('https://example.com/update-cache', { headers: { Authorization: 'Bearer cache-token' } });
+                expect(response.status).toBe(200);
+        });
+
+        it('does not leak session tokens in OAuth callback redirect locations', async () => {
+                const originalFetch = globalThis.fetch;
+                globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+                        if (url === 'https://oauth2.googleapis.com/token') {
+                                return new Response(JSON.stringify({ id_token: 'test-token' }), {
+                                        status: 200,
+                                        headers: { 'content-type': 'application/json' }
+                                });
+                        }
+                        return originalFetch(input as any, init);
+                }) as any;
+                try {
+                        const state = await signState('https://example.com', env);
+                        const response = await workerFetch(new Request(`https://example.com/oauth/callback?code=test-code&state=${encodeURIComponent(state)}`, { redirect: 'manual' }));
+                        expect(response.status).toBe(302);
+                        expect(response.headers.get('Set-Cookie') || '').toContain('session=');
+                        const location = response.headers.get('Location') || '';
+                        expect(location).not.toContain('token=');
+                        expect(response.headers.get('Cache-Control')).toBe('no-store');
+                        expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+                } finally {
+                        globalThis.fetch = originalFetch;
+                }
+        });
+
+        it('validates /stories/list query parameters', async () => {
+                const jwt = await signSession('test@example.com', env);
+                let response = await workerFetch('https://example.com/stories/list?page=0', { headers: { cookie: `session=${jwt}` } });
+                expect(response.status).toBe(400);
+                const longQ = 'a'.repeat(201);
+                response = await workerFetch(`https://example.com/stories/list?q=${longQ}`, { headers: { cookie: `session=${jwt}` } });
+                expect(response.status).toBe(400);
+                response = await workerFetch('https://example.com/stories/list?date=not-a-date', { headers: { cookie: `session=${jwt}` } });
+                expect(response.status).toBe(400);
+        });
+
+        it('hardens /api/media uploads (type/size limits + streaming)', async () => {
+                env.STORY_API_TOKEN = 'story-token';
+                const { bucket, getLastPut } = createImagesPutSpy();
+                env.IMAGES = bucket;
+
+                const bad = new FormData();
+                bad.set('file', new File([new Uint8Array([1, 2, 3])], 'x.txt', { type: 'text/plain' }));
+                let response = await workerFetch(new Request('https://example.com/api/media', { method: 'POST', body: bad, headers: { 'X-Story-Token': 'story-token' } }));
+                expect(response.status).toBe(415);
+
+                const tooBigBytes = new Uint8Array(10 * 1024 * 1024 + 1);
+                const tooBig = new FormData();
+                tooBig.set('file', new File([tooBigBytes], 'x.jpg', { type: 'image/jpeg' }));
+                response = await workerFetch(new Request('https://example.com/api/media', { method: 'POST', body: tooBig, headers: { 'X-Story-Token': 'story-token' } }));
+                expect(response.status).toBe(413);
+
+                const ok = new FormData();
+                ok.set('file', new File([new Uint8Array([1, 2, 3, 4])], 'x.jpg', { type: 'image/jpeg' }));
+                response = await workerFetch(new Request('https://example.com/api/media', { method: 'POST', body: ok, headers: { 'X-Story-Token': 'story-token' } }));
+                expect(response.status).toBe(200);
+                const put = getLastPut();
+                expect(put).not.toBeNull();
+                expect(put!.value).toBeInstanceOf(ReadableStream);
+                expect((put!.options as any)?.httpMetadata?.contentType).toBe('image/jpeg');
+        });
+
+        it('returns 400 for invalid dates on /stories form endpoints', async () => {
+                const jwt = await signSession('test@example.com', env);
+                const data = new FormData();
+                data.set('title', 'T');
+                data.set('content', 'C');
+                data.set('date', 'not-a-date');
+                const response = await workerFetch(new Request('https://example.com/stories', { method: 'POST', body: data, headers: { cookie: `session=${jwt}` } }));
+                expect(response.status).toBe(400);
         });
 });

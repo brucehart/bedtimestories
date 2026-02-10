@@ -9,6 +9,19 @@ const CACHE_REFRESH_MAX_DAYS = 30;
 const CACHE_KEY_PREFIX = 'https://bedtimestories.bruce-hart.workers.dev';
 const STORY_TOKEN_HEADER = 'X-Story-Token';
 
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+
+const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const ALLOWED_VIDEO_TYPES = new Set(['video/mp4', 'video/webm', 'video/quicktime']);
+
+const MAX_MEDIA_KEY_LENGTH = 200;
+const MEDIA_KEY_RE = /^[A-Za-z0-9._-]+$/;
+
+const MAX_QUERY_LENGTH = 200;
+const MAX_TITLE_LENGTH = 200;
+const MAX_CONTENT_LENGTH = 50_000;
+
 const CONTENT_TYPE_EXTENSION: Record<string, string> = {
     'image/jpeg': '.jpg',
     'image/png': '.png',
@@ -31,11 +44,15 @@ function buildConditionalHeaders(request: Request): Headers | undefined {
         'if-range'
     ];
     const headers = new Headers();
+    let any = false;
     for (const name of conditionalNames) {
         const value = request.headers.get(name);
-        if (value) headers.set(name, value);
+        if (value) {
+            headers.set(name, value);
+            any = true;
+        }
     }
-    return headers.size > 0 ? headers : undefined;
+    return any ? headers : undefined;
 }
 
 function requireStoryToken(request: Request, env: Env): Response | null {
@@ -50,15 +67,53 @@ function requireStoryToken(request: Request, env: Env): Response | null {
     return null;
 }
 
-function getFileExtension(file: File): string {
-    const name = file.name || '';
-    const dotIndex = name.lastIndexOf('.');
-    if (dotIndex > 0 && dotIndex < name.length - 1) {
-        const ext = name.slice(dotIndex).toLowerCase();
-        if (/^\.[a-z0-9]+$/.test(ext)) return ext;
+function getContentTypeExtension(contentType: string): string {
+    const normalized = contentType.toLowerCase();
+    return CONTENT_TYPE_EXTENSION[normalized] ?? '';
+}
+
+function validateMediaKey(key: string): boolean {
+    if (!key) return false;
+    if (key.length > MAX_MEDIA_KEY_LENGTH) return false;
+    return MEDIA_KEY_RE.test(key);
+}
+
+function applyHtmlSecurityHeaders(headers: Headers, options?: { cacheNoStore?: boolean }) {
+    headers.set('X-Frame-Options', 'DENY');
+    headers.set('Referrer-Policy', 'no-referrer');
+    headers.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+    // Keep inline scripts working; only lock down embedding/object/base behavior.
+    headers.set(
+        'Content-Security-Policy',
+        "frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
+    );
+    if (options?.cacheNoStore) {
+        headers.set('Cache-Control', 'no-store');
     }
-    const contentType = file.type.toLowerCase();
-    return CONTENT_TYPE_EXTENSION[contentType] ?? '';
+}
+
+function applyNoStoreNoReferrer(headers: Headers) {
+    headers.set('Cache-Control', 'no-store');
+    headers.set('Referrer-Policy', 'no-referrer');
+}
+
+type UploadKind = 'image' | 'video' | 'either';
+
+function validateUpload(file: File, kind: UploadKind): Response | null {
+    const contentType = (file.type || '').toLowerCase();
+    const isImage = ALLOWED_IMAGE_TYPES.has(contentType);
+    const isVideo = ALLOWED_VIDEO_TYPES.has(contentType);
+
+    if (kind === 'image' && !isImage) return new Response('Unsupported Media Type', { status: 415 });
+    if (kind === 'video' && !isVideo) return new Response('Unsupported Media Type', { status: 415 });
+    if (kind === 'either' && !isImage && !isVideo) return new Response('Unsupported Media Type', { status: 415 });
+
+    const limit = isImage ? MAX_IMAGE_BYTES : MAX_VIDEO_BYTES;
+    if (file.size > limit) return new Response('Payload Too Large', { status: 413 });
+
+    const ext = getContentTypeExtension(contentType);
+    if (!ext) return new Response('Unsupported Media Type', { status: 415 });
+    return null;
 }
 
 function normalizeStoryDate(value: string | undefined): string {
@@ -123,11 +178,10 @@ const preAuthRoutes: Route[] = [
         pattern: /^\/update-cache$/,
         handler: async (request, env, _ctx, _match, url) => {
             const requiredToken = env.CACHE_REFRESH_TOKEN;
-            if (requiredToken) {
-                const authHeader = request.headers.get('Authorization');
-                if (authHeader !== `Bearer ${requiredToken}`) {
-                    return new Response('Forbidden', { status: 403 });
-                }
+            if (!requiredToken) return new Response('Cache refresh token not configured', { status: 503 });
+            const authHeader = request.headers.get('Authorization');
+            if (authHeader !== `Bearer ${requiredToken}`) {
+                return new Response('Forbidden', { status: 403 });
             }
             const daysParam = url.searchParams.get('days');
             let days = CACHE_REFRESH_DEFAULT_DAYS;
@@ -208,10 +262,11 @@ const preAuthRoutes: Route[] = [
             if (!(file instanceof File)) {
                 return new Response('Missing file', { status: 400 });
             }
-            const ext = getFileExtension(file);
+            const uploadError = validateUpload(file, 'either');
+            if (uploadError) return uploadError;
+            const ext = getContentTypeExtension(file.type);
             const key = crypto.randomUUID() + ext;
-            const arrayBuffer = await file.arrayBuffer();
-            await env.IMAGES.put(key, arrayBuffer);
+            await env.IMAGES.put(key, file.stream(), { httpMetadata: { contentType: file.type } });
             return Response.json({ key, url: `/images/${encodeURIComponent(key)}` });
         }
     },
@@ -365,10 +420,11 @@ const preAuthRoutes: Route[] = [
                 prompt: 'select_account',
                 state
             });
-            return Response.redirect(
-                'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString(),
-                302
-            );
+            const headers = new Headers({
+                Location: 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString()
+            });
+            applyNoStoreNoReferrer(headers);
+            return new Response(null, { status: 302, headers });
         }
     },
     {
@@ -379,12 +435,14 @@ const preAuthRoutes: Route[] = [
             if (tokenParam) {
                 const email = await verifySession(tokenParam, env);
                 if (!email) return new Response('Invalid token', { status: 400 });
+                const headers = new Headers({
+                    Location: '/',
+                    'Set-Cookie': `session=${tokenParam}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_MAXAGE}`
+                });
+                applyNoStoreNoReferrer(headers);
                 return new Response(null, {
                     status: 302,
-                    headers: {
-                        Location: '/',
-                        'Set-Cookie': `session=${tokenParam}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_MAXAGE}`
-                    }
+                    headers
                 });
             }
 
@@ -410,11 +468,18 @@ const preAuthRoutes: Route[] = [
             const role = await getAccountRole(email, env);
             if (!role) return new Response('Forbidden', { status: 403 });
             const jwt = await signSession(email, env);
+            const redirectTarget = new URL(returnTo);
+            redirectTarget.pathname = '/';
+            redirectTarget.search = '';
+            redirectTarget.hash = '';
+            const headers = new Headers({
+                Location: redirectTarget.toString(),
+                'Set-Cookie': `session=${jwt}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_MAXAGE}`
+            });
+            applyNoStoreNoReferrer(headers);
             return new Response(null, {
                 status: 302,
-                headers: {
-                    Location: `${returnTo}/oauth/callback?token=${encodeURIComponent(jwt)}`
-                }
+                headers
             });
         }
     }
@@ -425,7 +490,12 @@ const routes: Route[] = [
     {
         method: 'GET',
         pattern: /^\/(?:|index\.html)$/,
-        handler: (request, env) => env.ASSETS.fetch(request)
+        handler: async (request, env) => {
+            const res = await env.ASSETS.fetch(request);
+            const headers = new Headers(res.headers);
+            applyHtmlSecurityHeaders(headers);
+            return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+        }
     },
     {
         method: 'GET',
@@ -487,17 +557,20 @@ const routes: Route[] = [
             const assetRequest = new Request(request.url.replace(/\/submit\/?$/, '/submit.html'), request);
             const res = await env.ASSETS.fetch(assetRequest);
             const headers = new Headers(res.headers);
-            headers.set('Cache-Control', 'no-store');
+            applyHtmlSecurityHeaders(headers, { cacheNoStore: true });
             return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
         }
     },
     {
         method: 'GET',
         pattern: /^\/manage(?:\.html|\/)?$/,
-        handler: (request, env, _ctx, _match, _url, auth) => {
+        handler: async (request, env, _ctx, _match, _url, auth) => {
             if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
             const assetRequest = new Request(request.url.replace(/\/manage\/?$/, '/manage.html'), request);
-            return env.ASSETS.fetch(assetRequest);
+            const res = await env.ASSETS.fetch(assetRequest);
+            const headers = new Headers(res.headers);
+            applyHtmlSecurityHeaders(headers, { cacheNoStore: true });
+            return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
         }
     },
     {
@@ -508,7 +581,7 @@ const routes: Route[] = [
             const assetRequest = new Request(request.url.replace(/\/edit\/?$/, '/edit.html'), request);
             const res = await env.ASSETS.fetch(assetRequest);
             const headers = new Headers(res.headers);
-            headers.set('Cache-Control', 'no-store');
+            applyHtmlSecurityHeaders(headers, { cacheNoStore: true });
             return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
         }
     },
@@ -516,7 +589,15 @@ const routes: Route[] = [
         method: 'GET',
         pattern: /^\/images\/(.+)$/,
         handler: async (request, env, ctx, match) => {
-            const key = decodeURIComponent(match[1]);
+            let key: string;
+            try {
+                key = decodeURIComponent(match[1]);
+            } catch {
+                return new Response('Invalid key', { status: 400 });
+            }
+            if (!validateMediaKey(key)) {
+                return new Response('Invalid key', { status: 400 });
+            }
             const { pathname, search } = new URL(request.url);
             const cacheKey = buildCacheRequest(pathname + search);
             const isRangeRequest = request.headers.has('range');
@@ -542,6 +623,8 @@ const routes: Route[] = [
                 headers.set('Cache-Control', 'public, max-age=31536000, immutable');
                 headers.set('Accept-Ranges', 'bytes');
                 headers.set('Content-Length', obj.size.toString());
+                headers.set('X-Content-Type-Options', 'nosniff');
+                headers.set('Cross-Origin-Resource-Policy', 'same-site');
 
                 let status = 200;
                 if (obj.range) {
@@ -581,16 +664,30 @@ const routes: Route[] = [
         pattern: /^\/stories\/list$/,
         handler: async (request, env, _ctx, _match, url, auth) => {
             if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
+            const pageParam = url.searchParams.get('page') || '1';
+            const page = Number(pageParam);
+            if (!Number.isInteger(page) || page < 1) {
+                return new Response('Invalid page parameter', { status: 400 });
+            }
+            const q = url.searchParams.get('q');
+            if (q && q.length > MAX_QUERY_LENGTH) {
+                return new Response('Query too long', { status: 400 });
+            }
+            const dateStr = url.searchParams.get('date');
+            let day: string | null = null;
+            if (dateStr) {
+                const parsed = new Date(dateStr);
+                if (Number.isNaN(parsed.getTime())) {
+                    return new Response('Invalid date', { status: 400 });
+                }
+                day = parsed.toISOString().substring(0, 10);
+            }
             try {
-                const page = Number(url.searchParams.get('page') || '1');
-                const q = url.searchParams.get('q');
-                const dateStr = url.searchParams.get('date');
                 const limit = 10;
                 const offset = (page - 1) * limit;
                 let stmt: D1PreparedStatement;
                 let countStmt: D1PreparedStatement;
-                if (dateStr) {
-                    const day = new Date(dateStr).toISOString().substring(0, 10);
+                if (day) {
                     if (q) {
                         const like = `%${q}%`;
                         stmt = env.DB.prepare(
@@ -707,27 +804,44 @@ const routes: Route[] = [
             if (typeof title !== 'string' || typeof contentMd !== 'string') {
                 return new Response('Invalid form data', { status: 400 });
             }
-            const contentHtml = markdownToHtml(contentMd);
+            const trimmedTitle = title.trim();
+            const trimmedContent = contentMd.trim();
+            if (!trimmedTitle || !trimmedContent) {
+                return new Response('Missing title or content', { status: 400 });
+            }
+            if (trimmedTitle.length > MAX_TITLE_LENGTH) {
+                return new Response('Title too long', { status: 400 });
+            }
+            if (trimmedContent.length > MAX_CONTENT_LENGTH) {
+                return new Response('Content too long', { status: 400 });
+            }
+            let dateIso = new Date().toISOString();
+            if (typeof dateStr === 'string' && dateStr.trim()) {
+                const parsed = new Date(dateStr);
+                if (Number.isNaN(parsed.getTime())) {
+                    return new Response('Invalid date', { status: 400 });
+                }
+                dateIso = parsed.toISOString();
+            }
+            const contentHtml = markdownToHtml(trimmedContent);
             let imageKey: string | null = null;
             let videoKey: string | null = null;
             if (imageFile instanceof File) {
-                const arrayBuffer = await imageFile.arrayBuffer();
-                const parts = imageFile.name.split('.');
-                const ext = parts.length > 1 ? '.' + parts.pop() : '';
-                imageKey = crypto.randomUUID() + ext;
-                await env.IMAGES.put(imageKey, arrayBuffer);
+                const uploadError = validateUpload(imageFile, 'image');
+                if (uploadError) return uploadError;
+                imageKey = crypto.randomUUID() + getContentTypeExtension(imageFile.type);
+                await env.IMAGES.put(imageKey, imageFile.stream(), { httpMetadata: { contentType: imageFile.type } });
             }
             if (videoFile instanceof File) {
-                const arrayBuffer = await videoFile.arrayBuffer();
-                const parts = videoFile.name.split('.');
-                const ext = parts.length > 1 ? '.' + parts.pop() : '';
-                videoKey = crypto.randomUUID() + ext;
-                await env.IMAGES.put(videoKey, arrayBuffer);
+                const uploadError = validateUpload(videoFile, 'video');
+                if (uploadError) return uploadError;
+                videoKey = crypto.randomUUID() + getContentTypeExtension(videoFile.type);
+                await env.IMAGES.put(videoKey, videoFile.stream(), { httpMetadata: { contentType: videoFile.type } });
             }
             try {
                 const stmt = env.DB.prepare(
                     'INSERT INTO stories (title, content, date, image_url, video_url, created, updated) VALUES (?1, ?2, ?3, ?4, ?5, datetime(\'now\'), datetime(\'now\'))'
-                ).bind(title, contentHtml, typeof dateStr === 'string' && dateStr ? new Date(dateStr).toISOString() : new Date().toISOString(), imageKey, videoKey);
+                ).bind(trimmedTitle, contentHtml, dateIso, imageKey, videoKey);
                 const result = await stmt.run();
                 const id = result.meta.last_row_id;
                 return Response.json({ id });
@@ -757,25 +871,42 @@ const routes: Route[] = [
             if (typeof title !== 'string' || typeof contentMd !== 'string') {
                 return new Response('Invalid form data', { status: 400 });
             }
-            const contentHtml = markdownToHtml(contentMd);
+            const trimmedTitle = title.trim();
+            const trimmedContent = contentMd.trim();
+            if (!trimmedTitle || !trimmedContent) {
+                return new Response('Missing title or content', { status: 400 });
+            }
+            if (trimmedTitle.length > MAX_TITLE_LENGTH) {
+                return new Response('Title too long', { status: 400 });
+            }
+            if (trimmedContent.length > MAX_CONTENT_LENGTH) {
+                return new Response('Content too long', { status: 400 });
+            }
+            let dateIso = new Date().toISOString();
+            if (typeof dateStr === 'string' && dateStr.trim()) {
+                const parsed = new Date(dateStr);
+                if (Number.isNaN(parsed.getTime())) {
+                    return new Response('Invalid date', { status: 400 });
+                }
+                dateIso = parsed.toISOString();
+            }
+            const contentHtml = markdownToHtml(trimmedContent);
             let imageKey: string | undefined;
             let videoKey: string | undefined;
             try {
                 const old = await env.DB.prepare('SELECT image_url, video_url FROM stories WHERE id = ?1').bind(id).first<{ image_url: string | null; video_url: string | null }>();
                 if (imageFile instanceof File) {
-                    const arrayBuffer = await imageFile.arrayBuffer();
-                    const parts = imageFile.name.split('.');
-                    const ext = parts.length > 1 ? '.' + parts.pop() : '';
-                    imageKey = crypto.randomUUID() + ext;
-                    await env.IMAGES.put(imageKey, arrayBuffer);
+                    const uploadError = validateUpload(imageFile, 'image');
+                    if (uploadError) return uploadError;
+                    imageKey = crypto.randomUUID() + getContentTypeExtension(imageFile.type);
+                    await env.IMAGES.put(imageKey, imageFile.stream(), { httpMetadata: { contentType: imageFile.type } });
                     if (old?.image_url) await env.IMAGES.delete(old.image_url);
                 }
                 if (videoFile instanceof File) {
-                    const arrayBuffer = await videoFile.arrayBuffer();
-                    const parts = videoFile.name.split('.');
-                    const ext = parts.length > 1 ? '.' + parts.pop() : '';
-                    videoKey = crypto.randomUUID() + ext;
-                    await env.IMAGES.put(videoKey, arrayBuffer);
+                    const uploadError = validateUpload(videoFile, 'video');
+                    if (uploadError) return uploadError;
+                    videoKey = crypto.randomUUID() + getContentTypeExtension(videoFile.type);
+                    await env.IMAGES.put(videoKey, videoFile.stream(), { httpMetadata: { contentType: videoFile.type } });
                     if (old?.video_url) await env.IMAGES.delete(old.video_url);
                 }
                 const stmt = env.DB.prepare(
@@ -784,8 +915,7 @@ const routes: Route[] = [
                     (videoKey !== undefined ? (imageKey !== undefined ? ', video_url = ?5' : ', video_url = ?4') : '') +
                     ' WHERE id = ?' + (imageKey !== undefined || videoKey !== undefined ? (imageKey !== undefined && videoKey !== undefined ? '6' : '5') : '4')
                 );
-                const dateIso = typeof dateStr === 'string' && dateStr ? new Date(dateStr).toISOString() : new Date().toISOString();
-                const params: (string | number)[] = [title, contentHtml, dateIso];
+                const params: (string | number)[] = [trimmedTitle, contentHtml, dateIso];
                 if (imageKey !== undefined) params.push(imageKey);
                 if (videoKey !== undefined) params.push(videoKey);
                 params.push(id);
