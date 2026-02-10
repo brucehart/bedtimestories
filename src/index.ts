@@ -23,12 +23,15 @@ function buildUpdateCacheRequest(env: Env): Request {
 }
 
 export default {
-    async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
         ctx.waitUntil(
             (async () => {
                 try {
                     const req = buildUpdateCacheRequest(env);
-                    await fetchHandler(req, env, ctx);
+                    const res = await fetchHandler(req, env, ctx);
+                    if (!res.ok) {
+                        console.error('scheduled update-cache returned non-OK', res.status);
+                    }
                 } catch (err) {
                     console.error('scheduled update-cache failed', err);
                 }

@@ -81,6 +81,11 @@ manage access. If the table is empty, any account is permitted as an editor.
 The Google OAuth client credentials should be stored as secrets named
 `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 
+### Security Notes
+
+- If `allowed_accounts` is empty, any Google account is treated as an `editor` (intentionally retained behavior; increases risk if the database is ever cleared).
+- The admin UI currently loads React from `unpkg.com` and uses inline scripts. This is a supply-chain risk (a compromised CDN response could perform authenticated actions). Recommended hardening is to self-host dependencies and move inline scripts into local JS files, then enforce a strict CSP.
+- `GET /update-cache` requires `CACHE_REFRESH_TOKEN` (Bearer auth). Do not deploy without setting it.
 
 ## API Summary
 
