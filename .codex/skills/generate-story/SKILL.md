@@ -13,7 +13,7 @@ You will be given:
 - Optionally a markdown file name that may include a date.
 
 Required environment variables:
-- `GEMINI_API_KEY` for Google Vertex (Gemini). Must be exported in the current environment (dotfiles may not be sourced).
+- `REPLICATE_API_TOKEN` for Replicate. Must be exported in the current environment (dotfiles may not be sourced).
 - `STORY_API_TOKEN` for the worker automation API.
 - `STORY_API_BASE_URL` (optional). If not set, use `https://bedtimestories.bruce-hart.workers.dev`.
 
@@ -29,7 +29,7 @@ The image script prints the generated image path so it can be passed to the vide
 ## Preflight (fail fast)
 Before doing anything else, verify the required env vars exist in the *current* shell environment:
 ```bash
-python -c 'import os; assert os.getenv("GEMINI_API_KEY"), "GEMINI_API_KEY missing"'
+python -c 'import os; assert os.getenv("REPLICATE_API_TOKEN"), "REPLICATE_API_TOKEN missing"'
 python -c 'import os; assert os.getenv("STORY_API_TOKEN"), "STORY_API_TOKEN missing"'
 command -v ffmpeg >/dev/null
 command -v curl >/dev/null
@@ -115,25 +115,19 @@ Optional flags:
 - `--image-prompt "..."` / `--video-prompt "..."` to override the default media prompts.
 - `--json` to print a single JSON object to stdout.
 
-## Step 2: Generate a cover image (Google Vertex Gemini)
-Model: `gemini-3-pro-image-preview`
+## Step 2: Generate a cover image (Replicate)
+Default model: `google/nano-banana-pro`
+Fallback model: `black-forest-labs/flux-1.1-pro`
 
 Image requirements:
 - Landscape, 16:9.
-- 1K resolution.
+- 2K resolution.
 - Cartoon aesthetic.
 - No text, letters, or signage.
 - Only include characters relevant to the selected scene.
-- Incorporate reference images as guidance when available (describe them in the prompt).
+- Incorporate reference images as guidance when available.
 
-Note: `run-generate-story.py` derives safe default image/video prompts from the provided `--title` and `--content-file` so it doesn't accidentally reuse a previous story theme. You can still override prompts explicitly with `--image-prompt` / `--video-prompt`.
-
-Install dependency:
-```bash
-pip install google-genai
-```
-
-If reference images are available, pass one or more with repeated `--image` flags.
+The script handles creating/polling Replicate predictions and downloading the generated image to `/tmp`.
 
 Generate and save the image locally (example with optional reference images):
 ```bash
@@ -143,26 +137,21 @@ IMAGE_PATH=$(python .codex/skills/generate-story/scripts/generate-image.py \
   "YOUR_IMAGE_PROMPT")
 ```
 
-The script saves the image(s) under `/tmp` and prints the first image path as output.
-Use the saved image file (e.g., the value in `$IMAGE_PATH`) for upload and as input to the video step.
+Use `--model` if you need to override the default.
 
-## Step 3: Generate a short video (Google Vertex Veo)
-Model: `veo-3.1-fast-generate-preview`
+## Step 3: Generate a short video (Replicate)
+Default model: `pixverse/pixverse-v5`
 
 Video requirements:
 - 16:9 landscape.
-- 8 seconds.
-- 24 fps.
+- 5 seconds.
 - Cartoon aesthetic.
 - No text or letters.
+- Use the generated cover image as a visual reference.
 - Use the story to build a concise scene prompt.
-- Use the generated cover image as a visual reference in the video request.
-Note: `frame_rate` is not accepted by the current `GenerateVideosConfig` schema. Keep 24 fps in the prompt instead.
+- Use quality `540p`, effect `None`.
 
-Install dependency:
-```bash
-pip install google-genai pillow
-```
+The script handles creating/polling Replicate predictions and downloading the generated video to `/tmp`.
 
 Generate and save the video locally (example):
 ```bash
@@ -171,7 +160,7 @@ VIDEO_PATH=$(python .codex/skills/generate-story/scripts/generate-video.py \
   "YOUR_VIDEO_PROMPT")
 ```
 
-Use the saved video file (e.g., the value in `$VIDEO_PATH`) for upload.
+Use `--model` if you need to override the default.
 
 Re-encode the video for iPhone compatibility before uploading:
 ```bash

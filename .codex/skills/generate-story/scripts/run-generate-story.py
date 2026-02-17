@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import mimetypes
 import os
 import shutil
 import subprocess
@@ -79,6 +80,12 @@ def read_text(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
+
+def upload_content_type(path: str, fallback: str) -> str:
+    content_type, _ = mimetypes.guess_type(path)
+    return content_type or fallback
+
+
 def story_fingerprint(title: str, content: str) -> str:
     # Stable, short identifier used only for debugging/prompt grounding.
     h = hashlib.sha256()
@@ -113,7 +120,7 @@ def default_video_prompt(title: str, content: str) -> str:
     excerpt = compact_story_excerpt(content)
     fp = story_fingerprint(title, content)
     return (
-        "Cartoon 8-second scene (landscape) showing ONE gentle moment from this story. "
+        "Cartoon 5-second scene (landscape) showing ONE gentle moment from this story. "
         "Slow, steady camera movement, warm lighting, family-friendly. "
         "Match the cover image style and characters; do not add characters not present in the moment. "
         "No text, letters, signage, logos, or watermarks. "
@@ -159,7 +166,7 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Print final output as JSON.")
     args = parser.parse_args()
 
-    require_env("GEMINI_API_KEY")
+    require_env("REPLICATE_API_TOKEN")
     story_token = require_env("STORY_API_TOKEN")
 
     which_or_die("curl")
@@ -236,13 +243,16 @@ def main() -> int:
         check=True,
     )
 
+    image_upload_type = upload_content_type(image_path, "image/jpeg")
+    video_upload_type = upload_content_type(encoded_path, "video/mp4")
+
     img_upload = curl_json(
         [
             f"{base_url}/api/media",
             "-H",
             f"X-Story-Token: {story_token}",
             "-F",
-            f"file=@{image_path}",
+            f"file=@{image_path};type={image_upload_type}",
         ]
     )
     vid_upload = curl_json(
@@ -251,7 +261,7 @@ def main() -> int:
             "-H",
             f"X-Story-Token: {story_token}",
             "-F",
-            f"file=@{encoded_path}",
+            f"file=@{encoded_path};type={video_upload_type}",
         ]
     )
 
