@@ -174,3 +174,5 @@ dist
 #draft story content for Codex
 story-drafts/
 
+
+__pycache__/
