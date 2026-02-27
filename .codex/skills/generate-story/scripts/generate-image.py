@@ -13,7 +13,7 @@ import urllib.request
 import uuid
 
 API_BASE = "https://api.replicate.com/v1"
-DEFAULT_MODEL = "google/nano-banana-pro"
+DEFAULT_MODEL = "google/nano-banana-2"
 FALLBACK_MODEL = "black-forest-labs/flux-1.1-pro"
 DEFAULT_POLL_SECONDS = 3
 
@@ -146,7 +146,7 @@ def generate(prompt: str, image_paths: list[str], model: str) -> tuple[str, str,
             "prompt": prompt,
             "image_input": image_input,
             "aspect_ratio": "16:9",
-            "resolution": "2K",
+            "resolution": "1K",
             "output_format": "jpg",
             "safety_filter_level": "block_only_high",
         }
