@@ -116,12 +116,12 @@ Optional flags:
 - `--json` to print a single JSON object to stdout.
 
 ## Step 2: Generate a cover image (Replicate)
-Default model: `google/nano-banana-pro`
+Default model: `google/nano-banana-2`
 Fallback model: `black-forest-labs/flux-1.1-pro`
 
 Image requirements:
 - Landscape, 16:9.
-- 2K resolution.
+- 1K resolution.
 - Cartoon aesthetic.
 - No text, letters, or signage.
 - Only include characters relevant to the selected scene.
