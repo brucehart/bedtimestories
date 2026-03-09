@@ -132,6 +132,8 @@ Image requirements:
 - Cartoon aesthetic
 - No text, letters, or signage
 - Only include characters relevant to the selected scene
+- If a named person appears, explicitly include that person's physical description from the Character rules in the image prompt
+- If the user specifies a visually distinctive setting, explicitly include those setting details in the image prompt
 
 Video requirements:
 - Landscape `16:9`
@@ -140,21 +142,29 @@ Video requirements:
 - No text or letters
 - Use the generated image as the visual reference
 - Keep the action simple and readable
+- If a named person appears, explicitly include that person's physical description from the Character rules in the video prompt
+- Carry forward any user-specified distinctive setting details from the image prompt into the video prompt
 
 ## Media prompt guidance
 
 Keep prompts short and scene-specific.
 
+Character fidelity requirements:
+- Do not refer to a named character only by role, such as `Mom` or `Dad`, when a physical description is available in Character rules
+- For each relevant named character in the scene, include the visible traits needed to identify them consistently
+- Include only the characters shown in the selected scene, but describe each of them concretely
+- If the setting has signature visual traits from the user prompt, include those traits explicitly rather than relying on the model to infer them
+
 Image prompt template:
 
 ```text
-Landscape 16:9 cartoon bedtime scene. {scene}. Include only {relevant_characters}. Warm storybook mood. No text, letters, or signage.
+Landscape 16:9 cartoon bedtime scene. {scene}. Include only {relevant_characters_with_physical_descriptions}. Setting details: {visual_setting_details}. Warm storybook mood. No text, letters, or signage.
 ```
 
 Video prompt template:
 
 ```text
-Gentle cartoon motion scene: {action}. Keep it cozy, readable, and simple. No text or letters.
+Gentle cartoon motion scene: {action}. Show {relevant_characters_with_physical_descriptions}. Setting details: {visual_setting_details}. Keep it cozy, readable, and simple. No text or letters.
 ```
 
 Do not dump the whole story into the media prompt. Use one scene only.
@@ -261,6 +271,8 @@ Before finishing, verify:
 - The title is separate from the body.
 - The body is plain text paragraphs only.
 - Only relevant characters appear in the story and media prompts.
+- Media prompts explicitly include the physical descriptions for every named person shown.
+- Media prompts include any distinctive user-requested setting details needed for scene accuracy.
 - Media prompts describe one scene, not the whole story.
 - The date is resolved.
 - The final response includes title, story content, image key, video key, and story id.
