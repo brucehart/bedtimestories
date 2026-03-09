@@ -1,34 +1,65 @@
 ---
 name: generate-story
-description: Draft a new bedtime story.
+description: Generate and publish a bedtime story for James with consistent text, cover art, and video.
 metadata:
-  short-description: Draft a new bedtime story.
+  short-description: Generate and publish a bedtime story for James.
 ---
 
 # Generate Story (Codex)
 
-You will be given:
-- A story subject (prompt) for James.
-- A folder path that may contain reference images and may include a date in the folder name.
-- Optionally a markdown file name that may include a date.
+Use this skill when the user wants a new bedtime story for James or wants to refresh media for an existing story.
 
-Required environment variables:
-- `REPLICATE_API_TOKEN` for Replicate. Must be exported in the current environment (dotfiles may not be sourced).
-- `STORY_API_TOKEN` for the worker automation API.
-- `STORY_API_BASE_URL` (optional). If not set, use `https://bedtimestories.bruce-hart.workers.dev`.
+## Input contract
 
-Activate the Python venv for any steps that run Python:
+Expect some combination of:
+- A freeform story prompt or source material.
+- Zero or more reference image paths.
+- Optionally a target date (`YYYY-MM-DD`).
+- Optionally a story id when updating an existing record.
+
+If the user provides a long synopsis, movie plot, or article-like background, treat it as inspiration only. Do not retell it beat-by-beat.
+
+## Output contract
+
+Always return:
+- `title`
+- `story_content`
+- `image_key`
+- `video_key`
+- `story_id`
+
+When relevant, also return the resolved `date`.
+
+## Required environment
+
+Required env vars:
+- `REPLICATE_API_TOKEN`
+- `STORY_API_TOKEN`
+- `STORY_API_BASE_URL` (optional, defaults to `https://bedtimestories.bruce-hart.workers.dev`)
+
+For any Python step, activate the venv first:
+
 ```bash
 source ~/scripts/.venv/bin/activate
 ```
 
-Use the following workflow exactly.
+## Fast path
 
-The image script prints the generated image path so it can be passed to the video script.
+Prefer this path unless blocked:
+1. Preflight.
+2. Resolve the story date.
+3. Write title and story content.
+4. Save the content to a temp file.
+5. Run `run-generate-story.py`.
 
-## Preflight (fail fast)
-Before doing anything else, verify the required env vars exist in the *current* shell environment:
+Use the manual image/video/upload steps only if the runner cannot satisfy the task.
+
+## Preflight
+
+Run this first:
+
 ```bash
+source ~/scripts/.venv/bin/activate
 python -c 'import os; assert os.getenv("REPLICATE_API_TOKEN"), "REPLICATE_API_TOKEN missing"'
 python -c 'import os; assert os.getenv("STORY_API_TOKEN"), "STORY_API_TOKEN missing"'
 command -v ffmpeg >/dev/null
@@ -36,133 +67,157 @@ command -v curl >/dev/null
 ```
 
 ## Step 0: Resolve story date
-1) If the folder name contains a `YYYY-MM-DD` date, use that.
-2) Else if the markdown file name contains a `YYYY-MM-DD` date, use that.
-3) Else find the next date (including today) that does not already have a story:
-   - Use the story API token to query existing story days.
-   - Fetch a range starting today through today + 365 days (extend the range if needed).
-   - Pick the earliest date in that range that is not present in the calendar data.
 
-Example:
-```bash
-START=$(date -u +%Y-%m-%d)
-END=$(date -u -d "+365 days" +%Y-%m-%d)
-curl -s "https://bedtimestories.bruce-hart.workers.dev/api/stories/calendar?start=$START&end=$END" \
-  -H "X-Story-Token: $STORY_API_TOKEN"
-```
-The response includes `{ "days": [ { "day": "YYYY-MM-DD", "count": N }, ... ] }`.
-Choose the first date starting at `START` that is missing from the `days` list.
+Use this order:
+1. If the user explicitly gives a date, use it.
+2. Else if an input folder name contains `YYYY-MM-DD`, use that.
+3. Else if an input markdown file name contains `YYYY-MM-DD`, use that.
+4. Else pick the next open date, starting with today in `America/New_York`.
 
-Helper script:
+Preferred helper:
+
 ```bash
-STORY_API_TOKEN=... \
-STORY_API_BASE_URL=https://bedtimestories.bruce-hart.workers.dev \
+source ~/scripts/.venv/bin/activate
 python .codex/skills/generate-story/scripts/next-open-date.py
 ```
-Environment variables:
-- `STORY_API_TOKEN` (required): story automation API token.
-- `STORY_API_BASE_URL` (optional): defaults to `https://bedtimestories.bruce-hart.workers.dev`.
-- `STORY_CALENDAR_DAYS` (optional): number of days to scan per request (default 365).
-- `STORY_TIMEZONE` (optional): timezone used to interpret "today" (default `America/New_York`).
 
-## Step 1: Write the story text (Markdown-compatible plain text)
-Follow these instructions exactly:
+Relevant env vars:
+- `STORY_API_TOKEN` required
+- `STORY_API_BASE_URL` optional
+- `STORY_CALENDAR_DAYS` optional, default `365`
+- `STORY_TIMEZONE` optional, default `America/New_York`
 
-For the given prompt, write a bedtime story including a title for my six year old son James. Make the text simple and phonics friendly for a beginning reader. Return the title separately and do not include it in the story content.
+## Step 1: Write the story
 
-[Story Content]
+Write a bedtime story for James.
 
-In addition to Mom and Dad in his family, James has a three year old sister named Grace. He also has a small tuxedo cat named Trixie. In his family is also Granny and Grandpa Rick and Grandma and Grandpa Bruce. Only include people that are relevant to the story. Do not include people just to include them.
+Hard requirements:
+- Return the title separately.
+- Do not include the title in `story_content`.
+- Use plain text paragraphs only.
+- No headings, bullets, or markdown decoration in the story body.
+- Default target length: `180-260` words.
+- Default target structure: `8-14` short paragraphs.
+- Use short, phonics-friendly sentences for a beginning reader.
+- End with a calm, safe feeling.
 
-Do not use words in any image generated. Images should be in landscape format and have a cartoon aesthetic. Only include people in the images that are relevant to the scene of the story being visualized.
+## Source adaptation rules
 
-James has fair skin and short brown hair.
+If the user provides complex source material:
+- Extract only `1-3` child-friendly ideas.
+- Prefer one simple adventure or dream arc.
+- Do not reproduce the full plot.
+- Remove or soften death, murder, assassination, terror, political conflict, mind control, disaster, and other intense material unless the user clearly asks to keep it.
+- Bias toward wonder, helping, friendship, bravery, problem-solving, and a gentle ending.
 
-Mom has fair skin, shoulder length brown hair with blonde highlights and glasses.
+## Character rules
 
-Grace has long brown hair and fair skin.
+Only include people or pets that matter to the specific story.
 
-Dad is bald and clean shaven with brown hair and thick dark eyebrows.
+Reference details:
+- James: fair skin, short brown hair.
+- Mom: fair skin, shoulder-length brown hair with blonde highlights, glasses.
+- Dad: bald, clean shaven, brown hair, thick dark eyebrows.
+- Grace: three years old, long brown hair, fair skin.
+- Granny: short, short gray hair.
+- Grandma: short blonde hair, glasses.
+- Grandpa Bruce: bald, clean shaven.
+- Grandpa Rick: bald, clean shaven, glasses.
+- Trixie: small tuxedo cat with short legs, white paws, black chin, black face, white chest.
 
-Granny is short with short gray hair.
+## Media rules
 
-Grandma has short blonde hair and glasses.
+Image requirements:
+- Landscape `16:9`
+- Cartoon aesthetic
+- No text, letters, or signage
+- Only include characters relevant to the selected scene
 
-Grandpa Bruce is bald and clean shaven.
+Video requirements:
+- Landscape `16:9`
+- `5` seconds
+- Cartoon aesthetic
+- No text or letters
+- Use the generated image as the visual reference
+- Keep the action simple and readable
 
-Grandpa Rick is bald, clean shaven and wears glasses.
+## Media prompt guidance
 
-Trixie is a black cat with short legs, white paws, black chin, black face and a white chest.
+Keep prompts short and scene-specific.
 
-Story format requirements:
-- Plain text paragraphs only. (Plain text with blank lines is valid Markdown; do not use Markdown formatting like headings/lists.)
-- Do not include the title in the story content.
-- Use short paragraphs separated by blank lines.
-- Keep sentences short and easy to read.
+Image prompt template:
 
-## Recommended: One-command run (Steps 0,2,3,4,5)
-After you have the title and story content, put the content in a file (example: `/tmp/story.txt`) and run:
+```text
+Landscape 16:9 cartoon bedtime scene. {scene}. Include only {relevant_characters}. Warm storybook mood. No text, letters, or signage.
+```
+
+Video prompt template:
+
+```text
+Gentle cartoon motion scene: {action}. Keep it cozy, readable, and simple. No text or letters.
+```
+
+Do not dump the whole story into the media prompt. Use one scene only.
+
+## Preferred command: new story
+
+After writing the story, save the body to a temp file such as `/tmp/story.txt`, then run:
+
 ```bash
 source ~/scripts/.venv/bin/activate
 python .codex/skills/generate-story/scripts/run-generate-story.py \
   --title "TITLE" \
-  --content-file /tmp/story.txt
+  --content-file /tmp/story.txt \
+  --date YYYY-MM-DD \
+  --ref-image /path/to/reference-image
 ```
-Optional flags:
-- `--date YYYY-MM-DD` to force a specific date instead of auto-selecting next open date.
-- `--story-id ID` to update an existing story's `image_url`/`video_url` (regenerates media, uploads it, then `PUT`s the keys).
-- `--ref-image /path/to.jpg` (repeatable) to guide the cover image with reference photos.
-- `--image-prompt "..."` / `--video-prompt "..."` to override the default media prompts.
-- `--json` to print a single JSON object to stdout.
 
-## Step 2: Generate a cover image (Replicate)
-Default model: `google/nano-banana-2`
-Fallback model: `black-forest-labs/flux-1.1-pro`
+Useful flags:
+- `--date YYYY-MM-DD` to force a date
+- `--ref-image /path/to.jpg` repeatable
+- `--image-prompt "..."` to override the default image prompt
+- `--video-prompt "..."` to override the default video prompt
+- `--json` for machine-readable output
 
-Image requirements:
-- Landscape, 16:9.
-- 1K resolution.
-- Cartoon aesthetic.
-- No text, letters, or signage.
-- Only include characters relevant to the selected scene.
-- Incorporate reference images as guidance when available.
+## Preferred command: update existing story media
 
-The script handles creating/polling Replicate predictions and downloading the generated image to `/tmp`.
+Use this when the user wants to keep the story record but regenerate media:
 
-Generate and save the image locally (example with optional reference images):
 ```bash
+source ~/scripts/.venv/bin/activate
+python .codex/skills/generate-story/scripts/run-generate-story.py \
+  --title "TITLE" \
+  --content-file /tmp/story.txt \
+  --story-id ID \
+  --ref-image /path/to/reference-image
+```
+
+This regenerates media, uploads it, and updates `image_url` and `video_url` for the existing record.
+
+## Manual fallback
+
+Use the manual path only if the runner is not suitable.
+
+Generate image:
+
+```bash
+source ~/scripts/.venv/bin/activate
 IMAGE_PATH=$(python .codex/skills/generate-story/scripts/generate-image.py \
-  --image "/path/to/reference-1.jpg" \
-  --image "/path/to/reference-2.png" \
-  "YOUR_IMAGE_PROMPT")
+  --image "/path/to/reference.jpg" \
+  "IMAGE_PROMPT")
 ```
 
-Use `--model` if you need to override the default.
+Generate video:
 
-## Step 3: Generate a short video (Replicate)
-Default model: `pixverse/pixverse-v5`
-
-Video requirements:
-- 16:9 landscape.
-- 5 seconds.
-- Cartoon aesthetic.
-- No text or letters.
-- Use the generated cover image as a visual reference.
-- Use the story to build a concise scene prompt.
-- Use quality `540p`, effect `None`.
-
-The script handles creating/polling Replicate predictions and downloading the generated video to `/tmp`.
-
-Generate and save the video locally (example):
 ```bash
+source ~/scripts/.venv/bin/activate
 VIDEO_PATH=$(python .codex/skills/generate-story/scripts/generate-video.py \
   "$IMAGE_PATH" \
-  "YOUR_VIDEO_PROMPT")
+  "VIDEO_PROMPT")
 ```
 
-Use `--model` if you need to override the default.
+Re-encode for iPhone compatibility:
 
-Re-encode the video for iPhone compatibility before uploading:
 ```bash
 ffmpeg -y -i "$VIDEO_PATH" \
   -c:v libx264 -profile:v high -level 4.0 -pix_fmt yuv420p \
@@ -170,31 +225,24 @@ ffmpeg -y -i "$VIDEO_PATH" \
   /tmp/story-video-encoded.mp4
 ```
 
-## Step 4: Upload media to R2 via worker API
-Base URL:
-- If `STORY_API_BASE_URL` is set, use that.
-- Else use `https://bedtimestories.bruce-hart.workers.dev`.
+Upload media:
 
-Upload image:
 ```bash
-curl -s "$STORY_API_BASE_URL/api/media" \
+curl -s "${STORY_API_BASE_URL:-https://bedtimestories.bruce-hart.workers.dev}/api/media" \
   -H "X-Story-Token: $STORY_API_TOKEN" \
   -F "file=@/path/to/image.jpg"
 ```
 
-Upload video:
 ```bash
-curl -s "$STORY_API_BASE_URL/api/media" \
+curl -s "${STORY_API_BASE_URL:-https://bedtimestories.bruce-hart.workers.dev}/api/media" \
   -H "X-Story-Token: $STORY_API_TOKEN" \
   -F "file=@/tmp/story-video-encoded.mp4"
 ```
 
-Each response returns `{ "key": "..." }`. Keep those keys.
+Create story:
 
-## Step 5: Create the story record
-Send the story to the worker:
 ```bash
-curl -s "$STORY_API_BASE_URL/api/stories" \
+curl -s "${STORY_API_BASE_URL:-https://bedtimestories.bruce-hart.workers.dev}/api/stories" \
   -H "X-Story-Token: $STORY_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -206,10 +254,13 @@ curl -s "$STORY_API_BASE_URL/api/stories" \
   }'
 ```
 
-## Final output to user
-Return:
-- Title
-- Story content (plain text)
-- Image key
-- Video key
-- Story id
+## Final checklist
+
+Before finishing, verify:
+- The story is short, simple, and bedtime-safe.
+- The title is separate from the body.
+- The body is plain text paragraphs only.
+- Only relevant characters appear in the story and media prompts.
+- Media prompts describe one scene, not the whole story.
+- The date is resolved.
+- The final response includes title, story content, image key, video key, and story id.
