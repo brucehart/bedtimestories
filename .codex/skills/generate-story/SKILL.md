@@ -115,10 +115,10 @@ If the user provides complex source material:
 Only include people or pets that matter to the specific story.
 
 Reference details:
-- James: fair skin, short brown hair.
+- James: seven years old, fair skin, short brown hair.
 - Mom: fair skin, shoulder-length brown hair with blonde highlights, glasses.
 - Dad: bald, clean shaven, brown hair, thick dark eyebrows.
-- Grace: three years old, long brown hair, fair skin.
+- Grace: four years old, long brown hair, fair skin.
 - Granny: short, short gray hair.
 - Grandma: short blonde hair, glasses.
 - Grandpa Bruce: bald, clean shaven.
