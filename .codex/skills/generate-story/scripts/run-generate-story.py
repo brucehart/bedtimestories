@@ -10,21 +10,14 @@ import sys
 import tempfile
 import uuid
 
+from story_media_common import load_default_secret_env, require_env
+
 
 DEFAULT_BASE_URL = "https://bedtimestories.bruce-hart.workers.dev"
 
 
 def eprint(msg: str) -> None:
     print(msg, file=sys.stderr)
-
-
-def require_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise SystemExit(
-            f"{name} is required (export it in the current environment; dotfiles may not be sourced)."
-        )
-    return value
 
 
 def which_or_die(name: str) -> None:
@@ -130,7 +123,21 @@ def default_video_prompt(title: str, content: str) -> str:
     )
 
 
+def resolve_media_providers(media_provider: str) -> tuple[str, str]:
+    mapping = {
+        "replicate": ("replicate", "replicate"),
+        "openai-media": ("openai", "openai"),
+        "openai-image": ("openai", "replicate"),
+        "openai-video": ("replicate", "openai"),
+    }
+    try:
+        return mapping[media_provider]
+    except KeyError as exc:
+        raise SystemExit(f"Unsupported media provider: {media_provider}") from exc
+
+
 def main() -> int:
+    load_default_secret_env()
     parser = argparse.ArgumentParser(
         description="End-to-end story runner: date -> image -> video -> upload -> create story."
     )
@@ -162,11 +169,21 @@ def main() -> int:
         "--video-prompt",
         help="Override the default video scene prompt.",
     )
+    parser.add_argument(
+        "--media-provider",
+        choices=("replicate", "openai-media", "openai-image", "openai-video"),
+        default=os.getenv("STORY_MEDIA_PROVIDER", "replicate"),
+        help="Select the media provider mode for image/video generation.",
+    )
     parser.add_argument("--keep-tmp", action="store_true", help="Keep intermediate files under /tmp.")
     parser.add_argument("--json", action="store_true", help="Print final output as JSON.")
     args = parser.parse_args()
 
-    require_env("REPLICATE_API_TOKEN")
+    image_provider, video_provider = resolve_media_providers(args.media_provider)
+    if "replicate" in {image_provider, video_provider}:
+        require_env("REPLICATE_API_TOKEN")
+    if "openai" in {image_provider, video_provider}:
+        require_env("OPENAI_API_KEY")
     story_token = require_env("STORY_API_TOKEN")
 
     which_or_die("curl")
@@ -197,7 +214,7 @@ def main() -> int:
             return proc.returncode
         date = proc.stdout.strip()
 
-    image_cmd = [sys.executable, image_script, "--json"]
+    image_cmd = [sys.executable, image_script, "--json", "--provider", image_provider]
     for ref in args.ref_image:
         image_cmd.extend(["--image", ref])
     image_cmd.append(image_prompt)
@@ -208,7 +225,15 @@ def main() -> int:
 
     video_env = {**os.environ, "STORY_VIDEO_POLL_SECONDS": str(args.poll_seconds)}
     video_res = run_json(
-        [sys.executable, video_script, "--json", image_path, video_prompt],
+        [
+            sys.executable,
+            video_script,
+            "--json",
+            "--provider",
+            video_provider,
+            image_path,
+            video_prompt,
+        ],
         env=video_env,
     )
     video_path = video_res.get("path")

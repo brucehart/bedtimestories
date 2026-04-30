@@ -7,6 +7,8 @@ import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
 
+from story_media_common import load_default_secret_env
+
 DEFAULT_BASE_URL = "https://bedtimestories.bruce-hart.workers.dev"
 DEFAULT_RANGE_DAYS = 365
 DEFAULT_TZ = "America/New_York"
@@ -76,6 +78,7 @@ def find_next_open_date(base_url: str, story_token: str, range_days: int) -> dat
 
 
 def main() -> int:
+    load_default_secret_env()
     story_token = os.getenv("STORY_API_TOKEN")
     if not story_token:
         print("STORY_API_TOKEN is required", file=sys.stderr)

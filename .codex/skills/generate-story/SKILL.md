@@ -33,9 +33,13 @@ When relevant, also return the resolved `date`.
 ## Required environment
 
 Required env vars:
-- `REPLICATE_API_TOKEN`
 - `STORY_API_TOKEN`
+- `REPLICATE_API_TOKEN` for default `replicate` media generation
+- `OPENAI_API_KEY` for `openai-media`, `openai-image`, or `openai-video`
+  - `OPENAI_BEDTIME_STORY_KEY` is also accepted as a local alias by the bundled scripts
 - `STORY_API_BASE_URL` (optional, defaults to `https://bedtimestories.bruce-hart.workers.dev`)
+
+The bundled scripts will also auto-load `$HOME/.config/secrets/codex.env` when these vars are not already exported.
 
 For any Python step, activate the venv first:
 
@@ -60,8 +64,11 @@ Run this first:
 
 ```bash
 source ~/scripts/.venv/bin/activate
-python -c 'import os; assert os.getenv("REPLICATE_API_TOKEN"), "REPLICATE_API_TOKEN missing"'
+set -a
+source "$HOME/.config/secrets/codex.env"
+set +a
 python -c 'import os; assert os.getenv("STORY_API_TOKEN"), "STORY_API_TOKEN missing"'
+python -c 'import os; assert os.getenv("REPLICATE_API_TOKEN") or os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_BEDTIME_STORY_KEY"), "REPLICATE_API_TOKEN or OpenAI key missing"'
 command -v ffmpeg >/dev/null
 command -v curl >/dev/null
 ```
@@ -169,6 +176,23 @@ Gentle cartoon motion scene: {action}. Show {relevant_characters_with_physical_d
 
 Do not dump the whole story into the media prompt. Use one scene only.
 
+## Media providers
+
+Default runner mode:
+- `replicate` uses Replicate for both image and video.
+
+Optional runner modes:
+- `--media-provider openai-media` uses OpenAI for both steps.
+- `--media-provider openai-image` uses OpenAI for image and Replicate for video.
+- `--media-provider openai-video` uses Replicate for image and OpenAI for video.
+
+Bundled OpenAI defaults:
+- Image: `gpt-image-2`, `1280x720`, `quality=low`, `output_format=jpeg`
+- Video: `sora-2`, `1280x720`, `4` seconds
+
+Current OpenAI video caveat:
+- The OpenAI video docs say `input_reference` must match the target video size, and input images with human faces may be rejected. If `openai-video` or `openai-media` fails on a people-focused scene, retry with the default provider.
+
 ## Preferred command: new story
 
 After writing the story, save the body to a temp file such as `/tmp/story.txt`, then run:
@@ -185,6 +209,7 @@ python .codex/skills/generate-story/scripts/run-generate-story.py \
 Useful flags:
 - `--date YYYY-MM-DD` to force a date
 - `--ref-image /path/to.jpg` repeatable
+- `--media-provider replicate|openai-media|openai-image|openai-video` to choose the media backend mix
 - `--image-prompt "..."` to override the default image prompt
 - `--video-prompt "..."` to override the default video prompt
 - `--json` for machine-readable output
@@ -217,6 +242,8 @@ IMAGE_PATH=$(python .codex/skills/generate-story/scripts/generate-image.py \
   "IMAGE_PROMPT")
 ```
 
+Add `--provider openai` to use `gpt-image-2`.
+
 Generate video:
 
 ```bash
@@ -225,6 +252,8 @@ VIDEO_PATH=$(python .codex/skills/generate-story/scripts/generate-video.py \
   "$IMAGE_PATH" \
   "VIDEO_PROMPT")
 ```
+
+Add `--provider openai` to use `sora-2`.
 
 Re-encode for iPhone compatibility:
 

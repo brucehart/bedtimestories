@@ -7,28 +7,31 @@ import os
 import pathlib
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 import uuid
 
-API_BASE = "https://api.replicate.com/v1"
+from story_media_common import (
+    build_multipart_form_data,
+    download_file,
+    mime_type_for_path,
+    request_json,
+    require_env,
+)
+
+REPLICATE_API_BASE = "https://api.replicate.com/v1"
+OPENAI_API_BASE = "https://api.openai.com/v1"
+DEFAULT_PROVIDER = "replicate"
 DEFAULT_MODEL = "google/nano-banana-2"
 FALLBACK_MODEL = "black-forest-labs/flux-1.1-pro"
+OPENAI_MODEL = "gpt-image-2"
+OPENAI_SIZE = "1280x720"
+OPENAI_QUALITY = "low"
+OPENAI_OUTPUT_FORMAT = "jpeg"
+OPENAI_OUTPUT_COMPRESSION = 80
 DEFAULT_POLL_SECONDS = 3
 
 
 def log(msg: str) -> None:
     print(msg, file=sys.stderr)
-
-
-def require_env(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value:
-        raise SystemExit(
-            f"{name} is required (export it in the current environment; dotfiles may not be sourced)."
-        )
-    return value
 
 
 def read_poll_seconds() -> int:
@@ -56,27 +59,20 @@ def to_data_uri(path: str) -> str:
 
 
 def replicate_request(token: str, method: str, url: str, payload: dict | None = None) -> dict:
-    headers = {
-        "Authorization": f"Token {token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-    data = None
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url=url, method=method, headers=headers, data=data)
-    try:
-        with urllib.request.urlopen(req) as resp:
-            body = resp.read().decode("utf-8")
-            return json.loads(body)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Replicate API error {exc.code}: {body[:2000]}") from exc
+    return request_json(
+        method,
+        url,
+        headers={
+            "Authorization": f"Token {token}",
+            "Content-Type": "application/json",
+        },
+        payload=payload,
+    )
 
 
 def wait_for_prediction(token: str, prediction_id: str) -> dict:
     poll_seconds = read_poll_seconds()
-    url = f"{API_BASE}/predictions/{prediction_id}"
+    url = f"{REPLICATE_API_BASE}/predictions/{prediction_id}"
     while True:
         pred = replicate_request(token, "GET", url)
         status = pred.get("status")
@@ -99,44 +95,24 @@ def first_output_url(output: object) -> str:
     raise RuntimeError(f"Unexpected prediction output: {output!r}")
 
 
-def guess_extension(url: str, headers: dict[str, str]) -> str:
-    content_type = headers.get("Content-Type", "").split(";")[0].strip().lower()
-    if content_type:
-        ext = mimetypes.guess_extension(content_type)
-        if ext:
-            return ext
-    parsed = urllib.parse.urlparse(url)
-    suffix = pathlib.Path(parsed.path).suffix.lower()
-    if suffix in {".jpg", ".jpeg", ".png", ".webp"}:
-        return suffix
-    return ".jpg"
-
-
-def download_file(url: str, prefix: str, default_ext: str) -> str:
-    req = urllib.request.Request(url=url, method="GET")
-    with urllib.request.urlopen(req) as resp:
-        data = resp.read()
-        headers = {k: v for k, v in resp.headers.items()}
-    ext = guess_extension(url, headers) or default_ext
-    output_path = f"/tmp/{prefix}-{uuid.uuid4().hex}{ext}"
-    with open(output_path, "wb") as f:
-        f.write(data)
-    return output_path
-
-
 def run_prediction(token: str, model: str, payload: dict) -> tuple[str, str]:
-    create_url = f"{API_BASE}/models/{model}/predictions"
+    create_url = f"{REPLICATE_API_BASE}/models/{model}/predictions"
     prediction = replicate_request(token, "POST", create_url, payload)
     prediction_id = prediction.get("id")
     if not prediction_id:
         raise RuntimeError(f"Missing prediction id from create response: {prediction}")
     final = wait_for_prediction(token, prediction_id)
     output_url = first_output_url(final.get("output"))
-    local_path = download_file(output_url, "story-image", ".jpg")
+    local_path = download_file(
+        output_url,
+        "story-image",
+        ".jpg",
+        allowed_suffixes={".jpg", ".jpeg", ".jpe", ".png", ".webp"},
+    )
     return local_path, output_url
 
 
-def generate(prompt: str, image_paths: list[str], model: str) -> tuple[str, str, str]:
+def generate_with_replicate(prompt: str, image_paths: list[str], model: str) -> tuple[str, str, str]:
     token = require_env("REPLICATE_API_TOKEN")
 
     image_input = [to_data_uri(path) for path in image_paths]
@@ -171,8 +147,86 @@ def generate(prompt: str, image_paths: list[str], model: str) -> tuple[str, str,
         return local_path, remote_url, FALLBACK_MODEL
 
 
+def decode_openai_image(result: dict, model: str) -> tuple[str, None, str]:
+    data = result.get("data")
+    if not isinstance(data, list) or not data:
+        raise RuntimeError(f"Unexpected OpenAI image response: {result}")
+
+    image_base64 = data[0].get("b64_json")
+    if not image_base64:
+        raise RuntimeError(f"Missing b64_json in OpenAI image response: {result}")
+
+    output_path = f"/tmp/story-image-{uuid.uuid4().hex}.jpg"
+    with open(output_path, "wb") as f:
+        f.write(base64.b64decode(image_base64))
+    return output_path, None, model
+
+
+def generate_with_openai(prompt: str, image_paths: list[str], model: str) -> tuple[str, None, str]:
+    token = require_env("OPENAI_API_KEY")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    if image_paths:
+        fields = [
+            ("model", model),
+            ("prompt", prompt),
+            ("size", OPENAI_SIZE),
+            ("quality", OPENAI_QUALITY),
+            ("output_format", OPENAI_OUTPUT_FORMAT),
+            ("output_compression", str(OPENAI_OUTPUT_COMPRESSION)),
+        ]
+        files: list[tuple[str, str, bytes, str]] = []
+        for image_path in image_paths:
+            path = pathlib.Path(image_path)
+            if not path.exists():
+                raise SystemExit(f"Reference image not found: {image_path}")
+            files.append(
+                (
+                    "image[]",
+                    path.name,
+                    path.read_bytes(),
+                    mime_type_for_path(str(path)),
+                )
+            )
+
+        body, content_type = build_multipart_form_data(fields, files)
+        result = request_json(
+            "POST",
+            f"{OPENAI_API_BASE}/images/edits",
+            headers={**headers, "Content-Type": content_type},
+            data=body,
+        )
+        return decode_openai_image(result, model)
+
+    result = request_json(
+        "POST",
+        f"{OPENAI_API_BASE}/images/generations",
+        headers=headers,
+        payload={
+            "model": model,
+            "prompt": prompt,
+            "size": OPENAI_SIZE,
+            "quality": OPENAI_QUALITY,
+            "output_format": OPENAI_OUTPUT_FORMAT,
+            "output_compression": OPENAI_OUTPUT_COMPRESSION,
+        },
+    )
+    return decode_openai_image(result, model)
+
+
+def generate(
+    prompt: str,
+    image_paths: list[str],
+    model: str,
+    provider: str,
+) -> tuple[str, str | None, str]:
+    if provider == "openai":
+        return generate_with_openai(prompt, image_paths, model)
+    return generate_with_replicate(prompt, image_paths, model)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate a story cover image via Replicate.")
+    parser = argparse.ArgumentParser(description="Generate a story cover image.")
     parser.add_argument(
         "--image",
         action="append",
@@ -180,9 +234,14 @@ def main() -> None:
         help="Path to a reference image (repeatable).",
     )
     parser.add_argument(
+        "--provider",
+        choices=("replicate", "openai"),
+        default=os.environ.get("STORY_IMAGE_PROVIDER", DEFAULT_PROVIDER),
+        help=f"Image provider to use (default: {DEFAULT_PROVIDER}).",
+    )
+    parser.add_argument(
         "--model",
-        default=DEFAULT_MODEL,
-        help=f"Replicate model slug for image generation (default: {DEFAULT_MODEL}).",
+        help="Override the model for the selected provider.",
     )
     parser.add_argument(
         "--json",
@@ -192,10 +251,21 @@ def main() -> None:
     parser.add_argument("prompt", help="Image prompt for the story cover.")
     args = parser.parse_args()
 
-    path, output_url, used_model = generate(args.prompt, args.image, args.model)
+    default_model = OPENAI_MODEL if args.provider == "openai" else DEFAULT_MODEL
+    model = args.model or default_model
+    path, output_url, used_model = generate(args.prompt, args.image, model, args.provider)
 
     if args.json:
-        print(json.dumps({"path": path, "output_url": output_url, "model": used_model}))
+        print(
+            json.dumps(
+                {
+                    "path": path,
+                    "output_url": output_url,
+                    "model": used_model,
+                    "provider": args.provider,
+                }
+            )
+        )
     else:
         print(path)
 
