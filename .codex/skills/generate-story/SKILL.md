@@ -181,6 +181,11 @@ Do not dump the whole story into the media prompt. Use one scene only.
 Default runner mode:
 - `replicate` uses Replicate for both image and video.
 
+Bundled Replicate defaults:
+- Image: `google/nano-banana-2`, landscape `16:9`, `resolution=1K`
+- Video: `wan-video/wan-2.2-i2v-fast`, `81` frames, `16` fps, `go_fast=true`, `resolution=480p`
+- To use the older PixVerse path, pass `--video-model pixverse/pixverse-v5`.
+
 Optional runner modes:
 - `--media-provider openai-media` uses OpenAI for both steps.
 - `--media-provider openai-image` uses OpenAI for image and Replicate for video.
@@ -210,6 +215,8 @@ Useful flags:
 - `--date YYYY-MM-DD` to force a date
 - `--ref-image /path/to.jpg` repeatable
 - `--media-provider replicate|openai-media|openai-image|openai-video` to choose the media backend mix
+- `--video-model pixverse/pixverse-v5` to use PixVerse instead of the default Replicate video model
+- `STORY_VIDEO_MODEL=pixverse/pixverse-v5` to make that override persistent for Replicate video runs
 - `--image-prompt "..."` to override the default image prompt
 - `--video-prompt "..."` to override the default video prompt
 - `--json` for machine-readable output
@@ -254,6 +261,7 @@ VIDEO_PATH=$(python .codex/skills/generate-story/scripts/generate-video.py \
 ```
 
 Add `--provider openai` to use `sora-2`.
+Add `--model pixverse/pixverse-v5` to use the older PixVerse v5 video model.
 
 Re-encode for iPhone compatibility:
 

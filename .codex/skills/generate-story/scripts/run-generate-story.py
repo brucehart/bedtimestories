@@ -170,6 +170,10 @@ def main() -> int:
         help="Override the default video scene prompt.",
     )
     parser.add_argument(
+        "--video-model",
+        help="Override the video model, for example pixverse/pixverse-v5.",
+    )
+    parser.add_argument(
         "--media-provider",
         choices=("replicate", "openai-media", "openai-image", "openai-video"),
         default=os.getenv("STORY_MEDIA_PROVIDER", "replicate"),
@@ -185,6 +189,9 @@ def main() -> int:
     if "openai" in {image_provider, video_provider}:
         require_env("OPENAI_API_KEY")
     story_token = require_env("STORY_API_TOKEN")
+    video_model = args.video_model
+    if not video_model and video_provider == "replicate":
+        video_model = os.getenv("STORY_VIDEO_MODEL")
 
     which_or_die("curl")
     which_or_die("ffmpeg")
@@ -224,18 +231,17 @@ def main() -> int:
         raise SystemExit(f"Image script did not return a valid path: {image_res}")
 
     video_env = {**os.environ, "STORY_VIDEO_POLL_SECONDS": str(args.poll_seconds)}
-    video_res = run_json(
-        [
-            sys.executable,
-            video_script,
-            "--json",
-            "--provider",
-            video_provider,
-            image_path,
-            video_prompt,
-        ],
-        env=video_env,
-    )
+    video_cmd = [
+        sys.executable,
+        video_script,
+        "--json",
+        "--provider",
+        video_provider,
+    ]
+    if video_model:
+        video_cmd.extend(["--model", video_model])
+    video_cmd.extend([image_path, video_prompt])
+    video_res = run_json(video_cmd, env=video_env)
     video_path = video_res.get("path")
     if not video_path or not os.path.exists(video_path):
         raise SystemExit(f"Video script did not return a valid path: {video_res}")

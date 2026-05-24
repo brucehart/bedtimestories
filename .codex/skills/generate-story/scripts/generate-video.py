@@ -14,6 +14,7 @@ import uuid
 from story_media_common import (
     build_multipart_form_data,
     download_file,
+    load_default_secret_env,
     mime_type_for_path,
     request_json,
     require_env,
@@ -22,7 +23,8 @@ from story_media_common import (
 REPLICATE_API_BASE = "https://api.replicate.com/v1"
 OPENAI_API_BASE = "https://api.openai.com/v1"
 DEFAULT_PROVIDER = "replicate"
-DEFAULT_MODEL = "pixverse/pixverse-v5"
+DEFAULT_MODEL = "wan-video/wan-2.2-i2v-fast"
+PIXVERSE_MODEL = "pixverse/pixverse-v5"
 OPENAI_MODEL = "sora-2"
 OPENAI_SIZE = "1280x720"
 # Current Sora video generations accept 4, 8, or 12 seconds. Keep the default
@@ -96,20 +98,47 @@ def first_output_url(output: object) -> str:
     raise RuntimeError(f"Unexpected prediction output: {output!r}")
 
 
-def generate_with_replicate(image_path: str, prompt: str, model: str) -> tuple[str, str, str]:
-    token = require_env("REPLICATE_API_TOKEN")
-    image_data_uri = to_data_uri(image_path)
+def normalize_replicate_model(model: str) -> str:
+    aliases = {
+        "wan-2.2-i2v-fast": DEFAULT_MODEL,
+        "wan-video/wan-2.2-i2v-fast": DEFAULT_MODEL,
+        "pixverse-v5": PIXVERSE_MODEL,
+        "pixverse/pixverse-v5": PIXVERSE_MODEL,
+    }
+    return aliases.get(model, model)
 
-    payload = {
+
+def build_replicate_payload(prompt: str, image_data_uri: str, model: str) -> dict:
+    if normalize_replicate_model(model) == PIXVERSE_MODEL:
+        return {
+            "input": {
+                "prompt": prompt,
+                "image": image_data_uri,
+                "aspect_ratio": "16:9",
+                "duration": 5,
+                "quality": "540p",
+                "effect": "None",
+            }
+        }
+
+    return {
         "input": {
             "prompt": prompt,
             "image": image_data_uri,
-            "aspect_ratio": "16:9",
-            "duration": 5,
-            "quality": "540p",
-            "effect": "None",
+            "num_frames": 81,
+            "frames_per_second": 16,
+            "go_fast": True,
+            "resolution": "480p",
+            "interpolate_output": False,
         }
     }
+
+
+def generate_with_replicate(image_path: str, prompt: str, model: str) -> tuple[str, str, str]:
+    token = require_env("REPLICATE_API_TOKEN")
+    image_data_uri = to_data_uri(image_path)
+    model = normalize_replicate_model(model)
+    payload = build_replicate_payload(prompt, image_data_uri, model)
 
     create_url = f"{REPLICATE_API_BASE}/models/{model}/predictions"
     prediction = replicate_request(token, "POST", create_url, payload)
@@ -271,6 +300,7 @@ def generate(
 
 
 def main() -> None:
+    load_default_secret_env()
     parser = argparse.ArgumentParser(description="Generate a story video.")
     parser.add_argument("image_path", help="Path to the reference image.")
     parser.add_argument("prompt", help="Video prompt for the story scene.")
@@ -291,7 +321,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    default_model = OPENAI_MODEL if args.provider == "openai" else DEFAULT_MODEL
+    default_model = OPENAI_MODEL if args.provider == "openai" else os.getenv("STORY_VIDEO_MODEL", DEFAULT_MODEL)
     model = args.model or default_model
     path, output_url, used_model = generate(args.image_path, args.prompt, model, args.provider)
     if args.json:
