@@ -20,7 +20,11 @@ JOB_ID = os.environ["STORY_AGENT_JOB_ID"]
 JOB_TOKEN = os.environ["STORY_AGENT_TOKEN"]
 WORKDIR = os.environ.get("STORY_AGENT_WORKDIR", "/home/sprite/bedtimestories/main")
 SECRETS_PATH = pathlib.Path.home() / ".config" / "secrets" / "codex.env"
-TASK_NAME = "story-agent-" + JOB_ID
+TASK_NAME = os.environ.get("STORY_AGENT_TASK_NAME") or re.sub(
+    r"[^a-z0-9-]+",
+    "-",
+    ("story-agent-" + JOB_ID).lower(),
+).strip("-")
 TASK_EXPIRE = "5m"
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
 
