@@ -545,6 +545,9 @@ export async function updateRunnerJob(request: Request, env: Env, jobId: string)
     const payload = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     const status = typeof payload?.status === 'string' ? payload.status : '';
     if (!JOB_STATUS.has(status)) return new Response('Invalid status', { status: 400 });
+    if (TERMINAL_STATUS.has(row.status)) {
+        return jsonResponse({ ok: true, ignored: true, status: row.status });
+    }
     const storyId = typeof payload?.story_id === 'number' && Number.isInteger(payload.story_id)
         ? payload.story_id
         : undefined;

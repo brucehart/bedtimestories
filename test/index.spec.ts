@@ -877,10 +877,49 @@ describe('Story page', () => {
                 }
         });
 
+        it('ignores late runner status updates after cancellation', async () => {
+                const token = 'runner-token';
+                const jobId = 'job_latecancel123456';
+                const agentState = createAgentState();
+                agentState.jobs.push({
+                        id: jobId,
+                        requested_by: 'test@example.com',
+                        prompt: 'A train story',
+                        target_date: null,
+                        status: 'canceled',
+                        sprite_name: 'bedtime-stories',
+                        sprite_session_id: null,
+                        story_id: null,
+                        title: null,
+                        error: null,
+                        callback_token_hash: await sha256Hex(token),
+                        created: new Date().toISOString(),
+                        updated: new Date().toISOString(),
+                        started: null,
+                        completed: new Date().toISOString()
+                });
+                env.DB = createDb(['test@example.com'], [], agentState);
+
+                const response = await workerFetch(`https://example.com/api/agent/jobs/${jobId}`, {
+                        method: 'PATCH',
+                        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status: 'complete', story_id: 42, title: 'Too Late' })
+                });
+                expect(response.status).toBe(200);
+                const body = await response.json<any>();
+                expect(body.ignored).toBe(true);
+                expect(agentState.jobs[0].status).toBe('canceled');
+                expect(agentState.jobs[0].story_id).toBeNull();
+                expect(agentState.jobs[0].title).toBeNull();
+        });
+
         it('passes Sprite reference image paths into Codex and generate-story', () => {
                 expect(STORY_AGENT_RUNNER).toContain('Reference images are attached to this Codex request');
                 expect(STORY_AGENT_RUNNER).toContain('--ref-image');
                 expect(STORY_AGENT_RUNNER).toContain('cmd.extend(["--image", ref_path])');
                 expect(STORY_AGENT_RUNNER).toContain('output_dir / (str(ref.get("id", len(paths) + 1)) + "-" + safe_name)');
+                expect(STORY_AGENT_RUNNER).toContain('pty.openpty()');
+                expect(STORY_AGENT_RUNNER).toContain('os.write(');
+                expect(STORY_AGENT_RUNNER).not.toContain('stdin=subprocess.DEVNULL');
         });
 });

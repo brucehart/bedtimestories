@@ -2,7 +2,9 @@ export const STORY_AGENT_RUNNER = String.raw`#!/usr/bin/env python3
 import json
 import os
 import pathlib
+import pty
 import re
+import select
 import shlex
 import subprocess
 import sys
@@ -20,6 +22,7 @@ WORKDIR = os.environ.get("STORY_AGENT_WORKDIR", "/home/sprite/bedtimestories/mai
 SECRETS_PATH = pathlib.Path.home() / ".config" / "secrets" / "codex.env"
 TASK_NAME = "story-agent-" + JOB_ID
 TASK_EXPIRE = "5m"
+ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
 
 
 def parse_env_value(raw):
@@ -180,7 +183,11 @@ def build_codex_prompt(job, ref_paths):
     )
 
 
-def poll_messages(proc):
+def strip_terminal(text):
+    return ANSI_RE.sub("", text).replace("\r", "")
+
+
+def poll_messages(proc, input_fd):
     last_id = 0
     while proc.poll() is None:
         try:
@@ -189,18 +196,19 @@ def poll_messages(proc):
             for msg in data.get("messages", []):
                 last_id = max(last_id, int(msg["id"]))
                 content = msg.get("content", "").strip()
-                if content and proc.stdin:
+                if content:
                     post_event("feedback", "Forwarding feedback to Codex.")
-                    proc.stdin.write("\nUser feedback from the manage page:\n" + content + "\n")
-                    proc.stdin.flush()
-                elif content:
-                    post_event("feedback", "Feedback received while Codex was busy.")
+                    os.write(
+                        input_fd,
+                        ("\nUser feedback from the manage page:\n" + content + "\n").encode("utf-8"),
+                    )
         except Exception as exc:
             post_event("warning", "Could not poll feedback: " + str(exc))
         time.sleep(5)
 
 
 def parse_result(output):
+    output = strip_terminal(output)
     marker = "STORY_AGENT_RESULT_JSON="
     for line in reversed(output.splitlines()):
         if marker in line:
@@ -232,13 +240,9 @@ def main():
         prompt = build_codex_prompt(job, ref_paths)
         env = os.environ.copy()
         env["STORY_API_BASE_URL"] = env.get("STORY_API_BASE_URL") or BASE_URL
-        final_message_path = "/tmp/story-agent-" + JOB_ID + "-last-message.txt"
         cmd = [
             "codex",
-            "exec",
-            "--json",
-            "--output-last-message",
-            final_message_path,
+            "--no-alt-screen",
             "--dangerously-bypass-approvals-and-sandbox",
             "--cd",
             WORKDIR,
@@ -247,38 +251,78 @@ def main():
             cmd.extend(["--image", ref_path])
         cmd.append(prompt)
         post_event("status", "Launching Codex story workflow.")
+        master_fd, slave_fd = pty.openpty()
         proc = subprocess.Popen(
             cmd,
             cwd=WORKDIR,
             env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True,
         )
-        thread = threading.Thread(target=poll_messages, args=(proc,), daemon=True)
+        os.close(slave_fd)
+        thread = threading.Thread(target=poll_messages, args=(proc, master_fd), daemon=True)
         thread.start()
 
         output_parts = []
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            output_parts.append(line)
-            clean = line.rstrip()
+        line_buffer = ""
+        result = None
+        while True:
+            timeout = 0 if proc.poll() is not None else 1
+            ready, _, _ = select.select([master_fd], [], [], timeout)
+            if not ready:
+                if proc.poll() is not None:
+                    break
+                continue
+            try:
+                chunk = os.read(master_fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            text = chunk.decode("utf-8", errors="replace")
+            output_parts.append(text)
+            line_buffer += text
+            while "\n" in line_buffer:
+                line, line_buffer = line_buffer.split("\n", 1)
+                clean = strip_terminal(line).rstrip()
+                if clean:
+                    post_event("log", clean)
+            result = parse_result("".join(output_parts))
+            if result and result.get("story_id"):
+                break
+
+        if line_buffer:
+            clean = strip_terminal(line_buffer).rstrip()
             if clean:
                 post_event("log", clean)
+
+        if result and result.get("story_id"):
+            patch_job(
+                "complete",
+                story_id=int(result["story_id"]),
+                title=str(result.get("title") or ""),
+            )
+            post_event("complete", "Story created.", result)
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=10)
+            os.close(master_fd)
+            return 0
+
         exit_code = proc.wait()
+        os.close(master_fd)
         output = "".join(output_parts)
         if exit_code != 0:
             patch_job("failed", error="Codex exited with status " + str(exit_code))
             post_event("error", "Codex exited with status " + str(exit_code))
             return exit_code
 
-        final_text = ""
-        final_path = pathlib.Path(final_message_path)
-        if final_path.exists():
-            final_text = final_path.read_text(encoding="utf-8", errors="replace")
-        result = parse_result(final_text + "\n" + output)
+        result = parse_result(output)
         if not result or not result.get("story_id"):
             patch_job("failed", error="Codex completed without a story_id result marker.")
             post_event("error", "Codex completed without a story_id result marker.")
