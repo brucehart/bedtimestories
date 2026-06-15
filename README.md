@@ -2,13 +2,22 @@
 
 # Bedtime Stories
 
-This project is a small [Cloudflare Workers](https://developers.cloudflare.com/workers/) application for managing and serving short stories.  The worker exposes a minimal REST API backed by a D1 database and an R2 bucket for images and serves a React based frontend from the `public` directory.
+This project is a small [Cloudflare Workers](https://developers.cloudflare.com/workers/) application for managing and serving short stories.  The worker exposes a REST API backed by a D1 database and an R2 bucket for story media and serves a React based frontend from the `public` directory.
 
 Stories may be scheduled by specifying a future date when submitting. Scheduled stories are hidden from the main viewer until their publish date but remain accessible through the manage interface or by direct link.
 
+## Features
+
+- Public story viewer with scheduled publishing, previous/next navigation, and optional image or video playback.
+- Editor-only submit, edit, and manage pages with search, date filtering, calendar highlights, and R2-backed media uploads.
+- Google OAuth access control with `reader` and `editor` roles, plus optional public viewing through `PUBLIC_VIEW`.
+- Edge-cached media delivery for images and videos, including byte-range and conditional request support.
+- Header-authenticated automation APIs for calendar lookup, media upload, and story create/update workflows.
+- Codex story generation workspace at `/generate-story`, launched from `/manage`, with Sprite-backed jobs, reference images, live logs, feedback messages, cancellation, and review links.
+
 ## Requirements
 
-- [Node.js](https://nodejs.org/) 18+
+- [Node.js](https://nodejs.org/) 20+
 - [Wrangler](https://developers.cloudflare.com/workers/wrangler/) CLI
 
 ## Installation
@@ -31,7 +40,8 @@ The application will be available at `http://localhost:8787`.
 
 ## Database 
 
-Create a D1 database with this structure:
+Create a D1 database with this structure. The matching schema files are in
+`db/stories_table.sql` and `db/allowed_accounts_table.sql`.
 
 ```
 CREATE TABLE stories (
@@ -55,8 +65,8 @@ CREATE TABLE allowed_accounts (
 );
 ```
 
-Agentic story generation from `/manage` also requires the tables in
-`db/story_agent_tables.sql`.
+Agentic story generation from `/manage` and `/generate-story` also requires the
+tables in `db/story_agent_tables.sql`.
 
 ## Deployment
 
@@ -84,11 +94,26 @@ manage access. If the table is empty, any account is permitted as an editor.
 The Google OAuth client credentials should be stored as secrets named
 `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 
-### Agentic Story Generation
+### Story Automation API
 
-The `/manage` page can launch story-generation jobs in a preconfigured Sprite.
-Story ideas may include optional reference images selected from a file picker or
-pasted into the prompt field.
+The bundled `generate-story` skill and Sprite runner use a header-authenticated
+automation API. Set `STORY_API_TOKEN` as a Worker secret and send it in
+`X-Story-Token`.
+
+- `GET /api/stories/calendar?start=YYYY-MM-DD&end=YYYY-MM-DD` returns days with scheduled stories for date selection.
+- `POST /api/media` accepts `multipart/form-data` with a `file` field, stores an image or video in R2, and returns the media key.
+- `POST /api/stories` accepts JSON with `title`, `content` (Markdown), optional `date`, and optional `image_url` / `video_url` R2 keys.
+- `PUT /api/stories/:id` accepts partial JSON updates for `title`, `content`, `date`, `image_url`, and `video_url`.
+
+### Codex Story Generation
+
+The `/manage` page links to `/generate-story`, where editors can launch
+story-generation jobs in a preconfigured Sprite. Story ideas may include an
+optional target date and up to three reference images selected from a file
+picker or pasted into the prompt field. The page shows recent jobs, streams
+runner logs with SSE, accepts feedback while the job is running, can cancel
+active jobs, and links completed jobs back to the generated story.
+
 Apply `db/story_agent_tables.sql`, keep the `bedtime-stories` Sprite updated
 with the project and `generate-story` skill, and configure these Worker secrets:
 
@@ -130,18 +155,23 @@ The worker exposes the following endpoints:
 - `GET /` – serves the story viewer
 - `GET /submit` – serves a form to add a new story
 - `GET /manage` – serves a page to edit or delete stories
-- `GET /images/:key` – returns an image from the `IMAGES` bucket with long-term caching
+- `GET /generate-story` – serves the Codex story generation workspace
+- `GET /update-cache` – warms recent media into `caches.default` with Bearer `CACHE_REFRESH_TOKEN`
+- `GET /images/:key` – returns image or video media from the `IMAGES` bucket with long-term caching
 - `GET /stories/list` – returns all stories in JSON
 - `GET /stories/calendar?start=YYYY-MM-DD&end=YYYY-MM-DD` – returns days with at least one story between the dates for calendar highlighting
 - `GET /stories` – returns the most recent story not scheduled for the future
 - `GET /stories/:id` – returns a single story
-- `POST /stories` – create a new story (multipart form data, fields: `title`, `content`, `date`, optional `image`)
-- `PUT /stories/:id` – update an existing story (multipart form data, fields: `title`, `content`, `date`, optional `image`)
+- `POST /stories` – create a new story (multipart form data, fields: `title`, `content`, `date`, optional `image`, optional `video`)
+- `PUT /stories/:id` – update an existing story (multipart form data, fields: `title`, `content`, `date`, optional `image`, optional `video`)
 - `DELETE /stories/:id` – remove a story
+- `GET /agent/jobs` – list recent story-generation jobs for the authenticated editor
 - `POST /agent/jobs` – create an authenticated story-generation job
+- `GET /agent/jobs/:id` – return one story-generation job
 - `GET /agent/jobs/:id/events` – replay job events as an SSE stream
 - `POST /agent/jobs/:id/messages` – queue feedback for the running job
 - `POST /agent/jobs/:id/cancel` – cancel an active story-generation job
+- `POST /api/media`, `POST /api/stories`, `PUT /api/stories/:id`, `GET /api/stories/calendar` – token-authenticated automation endpoints
 
 ## License
 
