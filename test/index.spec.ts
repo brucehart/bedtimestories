@@ -482,6 +482,7 @@ describe('Story page', () => {
                 const body = await response.text();
                 expect(body).toContain('Manage Stories');
                 expect(body).toContain('Submit New Story');
+                expect(body).toContain('Generate with Codex');
                 expect(response.headers.get('Cache-Control')).toBe('no-store');
                 expect(response.headers.get('X-Frame-Options')).toBe('DENY');
         });
@@ -492,6 +493,25 @@ describe('Story page', () => {
                 const body = await response.text();
                 expect(body).toContain('Manage Stories');
                 expect(body).toContain('Submit New Story');
+                expect(body).toContain('Generate with Codex');
+        });
+
+        it('serves the Codex generation page', async () => {
+                const jwt = await signSession('test@example.com', env);
+                const response = await workerFetch('https://example.com/generate-story', { headers: { cookie: `session=${jwt}` } });
+                const body = await response.text();
+                expect(body).toContain('Generate Story with Codex');
+                expect(body).toContain('Jobs');
+                expect(response.headers.get('Cache-Control')).toBe('no-store');
+                expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+        });
+
+        it('serves the Codex generation page with trailing slash', async () => {
+                const jwt = await signSession('test@example.com', env);
+                const response = await workerFetch('https://example.com/generate-story/', { headers: { cookie: `session=${jwt}` } });
+                const body = await response.text();
+                expect(body).toContain('Generate Story with Codex');
+                expect(body).toContain('Manage Stories');
         });
 
         it('denies reader accounts access to editor pages', async () => {
@@ -501,6 +521,8 @@ describe('Story page', () => {
                 expect(await getAccountRole('reader@example.com', env)).toBe('reader');
                 const resp = await workerFetch('https://example.com/submit', { headers: { cookie: `session=${jwt}` } });
                 expect(resp.status).toBe(403);
+                const generateResp = await workerFetch('https://example.com/generate-story', { headers: { cookie: `session=${jwt}` } });
+                expect(generateResp.status).toBe(403);
         });
 
         it('hides future stories from default endpoint', async () => {
@@ -530,6 +552,13 @@ describe('Story page', () => {
         it('requires login for submit page even when PUBLIC_VIEW is true', async () => {
                 env.PUBLIC_VIEW = 'true';
                 const response = await workerFetch(new Request('https://example.com/submit', { redirect: 'manual' }));
+                expect(response.status).toBe(302);
+                expect(response.headers.get('Location')).toBe('/login');
+        });
+
+        it('requires login for Codex generation page even when PUBLIC_VIEW is true', async () => {
+                env.PUBLIC_VIEW = 'true';
+                const response = await workerFetch(new Request('https://example.com/generate-story', { redirect: 'manual' }));
                 expect(response.status).toBe(302);
                 expect(response.headers.get('Location')).toBe('/login');
         });
@@ -705,7 +734,10 @@ describe('Story page', () => {
                         const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
                         if (url.startsWith('https://api.sprites.dev/')) {
                                 spriteRequests.push(url);
-                                expect(init?.headers).toEqual({ Authorization: 'Bearer sprites-token' });
+                                expect(init?.headers).toEqual({
+                                        Authorization: 'Bearer sprites-token',
+                                        'User-Agent': expect.stringContaining('Mozilla/5.0')
+                                });
                                 return Response.json({ ok: true });
                         }
                         return originalFetch(input as any, init);
@@ -747,6 +779,54 @@ describe('Story page', () => {
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).not.toContain('STORY_AGENT_ENV');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).not.toContain('& &&');
                         expect(agentState.events.some(event => event.message.includes('launch command accepted'))).toBe(true);
+                } finally {
+                        globalThis.fetch = originalFetch;
+                }
+        });
+
+        it('marks jobs failed with a concise message when Sprite launch is forbidden', async () => {
+                const originalFetch = globalThis.fetch;
+                globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+                        if (url.startsWith('https://api.sprites.dev/')) {
+                                expect(init?.headers).toEqual({
+                                        Authorization: 'Bearer sprites-token',
+                                        'User-Agent': expect.stringContaining('Mozilla/5.0')
+                                });
+                                return new Response('<!doctype html><html><body>Forbidden</body></html>', {
+                                        status: 403,
+                                        statusText: 'Forbidden',
+                                        headers: { 'Content-Type': 'text/html' }
+                                });
+                        }
+                        return originalFetch(input as any, init);
+                }) as any;
+
+                try {
+                        const agentState = createAgentState();
+                        env.DB = createDb(['test@example.com'], [], agentState);
+                        env.IMAGES = createAgentImages().bucket;
+                        env.STORY_AGENT_ALLOWED_EMAILS = 'test@example.com';
+                        env.SPRITES_API_TOKEN = 'sprites-token';
+                        const jwt = await signSession('test@example.com', env);
+                        const data = new FormData();
+                        data.set('prompt', 'A small comet story');
+
+                        const response = await workerFetch(new Request('https://example.com/agent/jobs', {
+                                method: 'POST',
+                                body: data,
+                                headers: { cookie: `session=${jwt}` }
+                        }));
+
+                        expect(response.status).toBe(202);
+                        expect(agentState.jobs[0].status).toBe('failed');
+                        expect(agentState.jobs[0].error).toContain('Sprite launch failed (403 Forbidden).');
+                        expect(agentState.jobs[0].error).not.toContain('<html>');
+                        expect(agentState.events.some(event =>
+                                event.event_type === 'failed' &&
+                                event.message.includes('Sprite launch failed (403 Forbidden).') &&
+                                !event.message.includes('<html>')
+                        )).toBe(true);
                 } finally {
                         globalThis.fetch = originalFetch;
                 }

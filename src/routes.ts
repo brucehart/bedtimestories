@@ -658,6 +658,18 @@ const routes: Route[] = [
     },
     {
         method: 'GET',
+        pattern: /^\/generate-story(?:\.html|\/)?$/,
+        handler: async (request, env, _ctx, _match, _url, auth) => {
+            if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
+            const assetRequest = new Request(request.url.replace(/\/generate-story\/?$/, '/generate-story.html'), request);
+            const res = await env.ASSETS.fetch(assetRequest);
+            const headers = new Headers(res.headers);
+            applyHtmlSecurityHeaders(headers, { cacheNoStore: true });
+            return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+        }
+    },
+    {
+        method: 'GET',
         pattern: /^\/edit(?:\.html|\/)?$/,
         handler: async (request, env, _ctx, _match, _url, auth) => {
             if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
