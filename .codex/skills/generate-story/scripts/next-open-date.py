@@ -7,7 +7,7 @@ import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
 
-from story_media_common import load_default_secret_env
+from story_media_common import load_default_secret_env, story_api_user_agent
 
 DEFAULT_BASE_URL = "https://bedtimestories.bruce-hart.workers.dev"
 DEFAULT_RANGE_DAYS = 365
@@ -37,11 +37,7 @@ def fetch_calendar_days(base_url: str, start: datetime.date, end: datetime.date,
     url = f"{base_url}/api/stories/calendar?{params}"
     req = urllib.request.Request(url)
     req.add_header("X-Story-Token", story_token)
-    req.add_header(
-        "User-Agent",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    )
+    req.add_header("User-Agent", story_api_user_agent())
     req.add_header("Accept", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:

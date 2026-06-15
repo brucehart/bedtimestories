@@ -188,8 +188,8 @@ def build_codex_prompt(job, ref_paths):
         "No reference images were provided."
         if not ref_paths
         else (
-            "Reference images are attached to this Codex request and also stored at the /tmp paths above. "
-            "Inspect them and use visible details as inspiration for the story. "
+            "Reference images are available at the /tmp paths above. "
+            "Inspect those files directly and use visible details as inspiration for the story. "
             "When running the generate-story workflow, include every listed path as a separate --ref-image argument "
             "so the media generation provider receives the same references."
         )
@@ -205,8 +205,9 @@ def build_codex_prompt(job, ref_paths):
         + "\n\n"
         + reference_instruction
         + "\n\nRun the full workflow, including media generation and publishing through the existing story API. "
-        "Stream useful progress as you work. When complete, print exactly one final line in this format:\n"
-        "STORY_AGENT_RESULT_JSON={\"story_id\":123,\"title\":\"Title\",\"image_key\":\"image-key\",\"video_key\":\"video-key\"}\n"
+        "Stream useful progress as you work. When complete, print exactly one final line beginning with "
+        "STORY_AGENT_RESULT_JSON= followed by compact JSON containing the actual story_id, title, image_key, "
+        "and video_key returned by the publishing workflow. Do not print placeholder values or example JSON.\n"
     )
 
 
@@ -240,13 +241,35 @@ def parse_result(output):
     for line in reversed(output.splitlines()):
         if marker in line:
             raw = line.split(marker, 1)[1].strip()
-            return json.loads(raw)
+            try:
+                parsed = json.loads(raw)
+                if is_real_result(parsed):
+                    return parsed
+            except Exception:
+                continue
     for match in reversed(re.findall(r"\{[^{}]*\"story_id\"[^{}]*\}", output)):
         try:
-            return json.loads(match)
+            parsed = json.loads(match)
+            if is_real_result(parsed):
+                return parsed
         except Exception:
             continue
     return None
+
+
+def is_real_result(value):
+    if not isinstance(value, dict):
+        return False
+    story_id = value.get("story_id")
+    if not isinstance(story_id, int) or story_id <= 0:
+        return False
+    if value.get("title") == "Title":
+        return False
+    if value.get("image_key") == "image-key":
+        return False
+    if value.get("video_key") == "video-key":
+        return False
+    return True
 
 
 def main():
@@ -268,15 +291,22 @@ def main():
         prompt = build_codex_prompt(job, ref_paths)
         env = os.environ.copy()
         env["STORY_API_BASE_URL"] = env.get("STORY_API_BASE_URL") or BASE_URL
+        result_path = pathlib.Path("/tmp") / ("story-agent-" + JOB_ID + "-codex-result.txt")
+        try:
+            result_path.unlink()
+        except FileNotFoundError:
+            pass
         cmd = [
             "codex",
-            "--no-alt-screen",
+            "exec",
             "--dangerously-bypass-approvals-and-sandbox",
             "--cd",
             WORKDIR,
+            "--color",
+            "never",
+            "--output-last-message",
+            str(result_path),
         ]
-        for ref_path in ref_paths:
-            cmd.extend(["--image", ref_path])
         cmd.append(prompt)
         post_event("status", "Launching Codex story workflow.")
         master_fd, slave_fd = pty.openpty()
@@ -290,18 +320,25 @@ def main():
             close_fds=True,
         )
         os.close(slave_fd)
+        post_event("status", "Codex exec process started with pid " + str(proc.pid) + ".")
         thread = threading.Thread(target=poll_messages, args=(proc, master_fd), daemon=True)
         thread.start()
 
         output_parts = []
         line_buffer = ""
         result = None
+        last_output_at = time.time()
+        last_idle_event_at = last_output_at
         while True:
             timeout = 0 if proc.poll() is not None else 1
             ready, _, _ = select.select([master_fd], [], [], timeout)
             if not ready:
                 if proc.poll() is not None:
                     break
+                now = time.time()
+                if now - last_output_at > 120 and now - last_idle_event_at > 120:
+                    post_event("status", "Codex exec is still running; waiting for output.")
+                    last_idle_event_at = now
                 continue
             try:
                 chunk = os.read(master_fd, 4096)
@@ -310,6 +347,7 @@ def main():
             if not chunk:
                 break
             text = chunk.decode("utf-8", errors="replace")
+            last_output_at = time.time()
             output_parts.append(text)
             line_buffer += text
             while "\n" in line_buffer:
@@ -317,14 +355,31 @@ def main():
                 clean = strip_terminal(line).rstrip()
                 if clean:
                     post_event("log", clean)
-            result = parse_result("".join(output_parts))
-            if result and result.get("story_id"):
-                break
 
         if line_buffer:
             clean = strip_terminal(line_buffer).rstrip()
             if clean:
                 post_event("log", clean)
+
+        exit_code = proc.wait()
+        os.close(master_fd)
+
+        if result_path.exists():
+            try:
+                final_message = result_path.read_text(encoding="utf-8")
+                if final_message:
+                    output_parts.append("\n" + final_message)
+                    result = parse_result(final_message)
+            except Exception as exc:
+                post_event("warning", "Could not read Codex final message: " + str(exc))
+
+        if exit_code != 0:
+            patch_job("failed", error="Codex exited with status " + str(exit_code))
+            post_event("error", "Codex exited with status " + str(exit_code))
+            return exit_code
+
+        if not result:
+            result = parse_result("".join(output_parts))
 
         if result and result.get("story_id"):
             patch_job(
@@ -333,36 +388,12 @@ def main():
                 title=str(result.get("title") or ""),
             )
             post_event("complete", "Story created.", result)
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=10)
-            os.close(master_fd)
             return 0
 
-        exit_code = proc.wait()
-        os.close(master_fd)
-        output = "".join(output_parts)
-        if exit_code != 0:
-            patch_job("failed", error="Codex exited with status " + str(exit_code))
-            post_event("error", "Codex exited with status " + str(exit_code))
-            return exit_code
-
-        result = parse_result(output)
         if not result or not result.get("story_id"):
             patch_job("failed", error="Codex completed without a story_id result marker.")
             post_event("error", "Codex completed without a story_id result marker.")
             return 2
-
-        patch_job(
-            "complete",
-            story_id=int(result["story_id"]),
-            title=str(result.get("title") or ""),
-        )
-        post_event("complete", "Story created.", result)
-        return 0
     finally:
         task_stop.set()
         release_task()
