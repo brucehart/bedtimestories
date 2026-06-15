@@ -19,6 +19,7 @@ const MAX_AGENT_REF_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_AGENT_EVENT_MESSAGE_LENGTH = 8000;
 const MAX_AGENT_ERROR_LENGTH = 2000;
 const MAX_AGENT_TITLE_LENGTH = 200;
+const MAX_SPRITE_ERROR_SNIPPET_BYTES = 500;
 
 const AGENT_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const JOB_ID_RE = /^[A-Za-z0-9_-]{16,80}$/;
@@ -81,6 +82,53 @@ function textResponse(value: string, init?: ResponseInit): Response {
     headers.set('Cache-Control', 'no-store');
     headers.set('Referrer-Policy', 'no-referrer');
     return new Response(value, { ...init, headers });
+}
+
+async function readResponseSnippet(response: Response, maxBytes: number): Promise<string> {
+    if (!response.body) return '';
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+        while (total < maxBytes) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (!value) continue;
+            const remaining = maxBytes - total;
+            const chunk = value.byteLength > remaining ? value.slice(0, remaining) : value;
+            chunks.push(chunk);
+            total += chunk.byteLength;
+            if (value.byteLength > remaining) break;
+        }
+    } finally {
+        await reader.cancel().catch(() => undefined);
+    }
+    if (total === 0) return '';
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(bytes).trim();
+}
+
+function cleanUpstreamErrorSnippet(value: string): string {
+    const normalized = value.replace(/\s+/g, ' ').trim();
+    if (!normalized) return '';
+    if (/<\s*(!doctype|html|head|body)\b/i.test(normalized)) return '';
+    return normalized.slice(0, MAX_SPRITE_ERROR_SNIPPET_BYTES);
+}
+
+async function spriteLaunchError(response: Response): Promise<string> {
+    const statusText = response.statusText ? ` ${response.statusText}` : '';
+    const snippet = cleanUpstreamErrorSnippet(
+        await readResponseSnippet(response, MAX_SPRITE_ERROR_SNIPPET_BYTES)
+    );
+    const message = `Sprite launch failed (${response.status}${statusText}).`;
+    return snippet
+        ? `${message} ${snippet}`
+        : `${message} Check SPRITES_API_TOKEN, STORY_AGENT_SPRITE_NAME, and Sprites access.`;
 }
 
 function parseAllowedEmails(env: Env): Set<string> {
@@ -303,11 +351,13 @@ async function launchSpriteJob(env: Env, origin: string, jobId: string, callback
 
     const response = await fetch(url.toString(), {
         method: 'POST',
-        headers: { Authorization: `Bearer ${config.token}` }
+        headers: {
+            Authorization: `Bearer ${config.token}`,
+            'User-Agent': SPRITE_RUNNER_USER_AGENT
+        }
     });
     if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`Sprite launch failed (${response.status}): ${body.slice(0, 500)}`);
+        throw new Error(await spriteLaunchError(response));
     }
     await appendAgentEvent(env, jobId, 'status', 'Sprite runner launch command accepted.');
 }
@@ -329,7 +379,10 @@ async function cancelSpriteJob(env: Env, jobId: string) {
     url.searchParams.set('dir', config.workdir);
     await fetch(url.toString(), {
         method: 'POST',
-        headers: { Authorization: `Bearer ${config.token}` }
+        headers: {
+            Authorization: `Bearer ${config.token}`,
+            'User-Agent': SPRITE_RUNNER_USER_AGENT
+        }
     });
 }
 
@@ -416,7 +469,7 @@ export async function createAgentJob(request: Request, env: Env, ctx: ExecutionC
         launchSpriteJob(env, origin, jobId, callbackToken).catch(async error => {
             const message = error instanceof Error ? error.message : 'Sprite launch failed';
             await updateJobStatus(env, jobId, 'failed', { error: message });
-            await appendAgentEvent(env, jobId, 'error', message);
+            await appendAgentEvent(env, jobId, 'failed', message);
         })
     );
 
