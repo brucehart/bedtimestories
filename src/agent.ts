@@ -273,7 +273,13 @@ async function cancelSpriteJob(env: Env, jobId: string) {
     const url = new URL(`${config.apiBase}/v1/sprites/${encodeURIComponent(config.spriteName)}/exec`);
     url.searchParams.append('cmd', 'bash');
     url.searchParams.append('cmd', '-lc');
-    url.searchParams.append('cmd', `pkill -TERM -f ${quoteShell(`story-agent-${jobId}.py`)} || true`);
+    url.searchParams.append(
+        'cmd',
+        [
+            `pkill -TERM -f ${quoteShell(`story-agent-${jobId}.py`)} || true`,
+            `curl -fsS --unix-socket /.sprite/api.sock -X DELETE ${quoteShell(`http://sprite/v1/tasks/story-agent-${jobId}`)} >/dev/null 2>&1 || true`
+        ].join('; ')
+    );
     url.searchParams.set('dir', config.workdir);
     await fetch(url.toString(), {
         method: 'POST',

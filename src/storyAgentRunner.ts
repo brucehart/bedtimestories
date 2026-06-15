@@ -18,6 +18,8 @@ JOB_ID = os.environ["STORY_AGENT_JOB_ID"]
 JOB_TOKEN = os.environ["STORY_AGENT_TOKEN"]
 WORKDIR = os.environ.get("STORY_AGENT_WORKDIR", "/home/sprite/bedtimestories/main")
 SECRETS_PATH = pathlib.Path.home() / ".config" / "secrets" / "codex.env"
+TASK_NAME = "story-agent-" + JOB_ID
+TASK_EXPIRE = "5m"
 
 
 def parse_env_value(raw):
@@ -60,6 +62,50 @@ def api_request(method, path, payload=None, timeout=30):
         if not body:
             return {}
         return json.loads(body.decode("utf-8"))
+
+
+def task_request(method, path, payload=None):
+    cmd = [
+        "curl",
+        "-fsS",
+        "--unix-socket",
+        "/.sprite/api.sock",
+        "-X",
+        method,
+        "http://sprite" + path,
+    ]
+    if payload is not None:
+        cmd.extend(["-H", "Content-Type: application/json", "-d", json.dumps(payload)])
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+
+def refresh_task():
+    task_request("PUT", "/v1/tasks/" + urllib.parse.quote(TASK_NAME), {"expire": TASK_EXPIRE})
+
+
+def release_task():
+    subprocess.run(
+        [
+            "curl",
+            "-fsS",
+            "--unix-socket",
+            "/.sprite/api.sock",
+            "-X",
+            "DELETE",
+            "http://sprite/v1/tasks/" + urllib.parse.quote(TASK_NAME),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def heartbeat_task(stop_event):
+    while not stop_event.wait(60):
+        try:
+            refresh_task()
+        except Exception as exc:
+            post_event("warning", "Could not refresh Sprite task hold: " + str(exc))
 
 
 def post_event(event_type, message, metadata=None):
@@ -158,73 +204,83 @@ def parse_result(output):
 
 def main():
     load_secret_env()
-    job = bootstrap()
-    patch_job("running")
-    post_event("status", "Story agent started in Sprite.")
-    ref_paths = download_refs(job.get("refs", []))
-    if ref_paths:
-        post_event("status", "Downloaded " + str(len(ref_paths)) + " reference image(s).")
+    refresh_task()
+    task_stop = threading.Event()
+    task_thread = threading.Thread(target=heartbeat_task, args=(task_stop,), daemon=True)
+    task_thread.start()
+    post_event("status", "Sprite task hold acquired.")
+    try:
+        job = bootstrap()
+        patch_job("running")
+        post_event("status", "Story agent started in Sprite.")
+        ref_paths = download_refs(job.get("refs", []))
+        if ref_paths:
+            post_event("status", "Downloaded " + str(len(ref_paths)) + " reference image(s).")
 
-    prompt = build_codex_prompt(job, ref_paths)
-    env = os.environ.copy()
-    env["STORY_API_BASE_URL"] = env.get("STORY_API_BASE_URL") or BASE_URL
-    final_message_path = "/tmp/story-agent-" + JOB_ID + "-last-message.txt"
-    cmd = [
-        "codex",
-        "exec",
-        "--json",
-        "--output-last-message",
-        final_message_path,
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--cd",
-        WORKDIR,
-        prompt,
-    ]
-    post_event("status", "Launching Codex story workflow.")
-    proc = subprocess.Popen(
-        cmd,
-        cwd=WORKDIR,
-        env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    thread = threading.Thread(target=poll_messages, args=(proc,), daemon=True)
-    thread.start()
+        prompt = build_codex_prompt(job, ref_paths)
+        env = os.environ.copy()
+        env["STORY_API_BASE_URL"] = env.get("STORY_API_BASE_URL") or BASE_URL
+        final_message_path = "/tmp/story-agent-" + JOB_ID + "-last-message.txt"
+        cmd = [
+            "codex",
+            "exec",
+            "--json",
+            "--output-last-message",
+            final_message_path,
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--cd",
+            WORKDIR,
+            prompt,
+        ]
+        post_event("status", "Launching Codex story workflow.")
+        proc = subprocess.Popen(
+            cmd,
+            cwd=WORKDIR,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        thread = threading.Thread(target=poll_messages, args=(proc,), daemon=True)
+        thread.start()
 
-    output_parts = []
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        output_parts.append(line)
-        clean = line.rstrip()
-        if clean:
-            post_event("log", clean)
-    exit_code = proc.wait()
-    output = "".join(output_parts)
-    if exit_code != 0:
-        patch_job("failed", error="Codex exited with status " + str(exit_code))
-        post_event("error", "Codex exited with status " + str(exit_code))
-        return exit_code
+        output_parts = []
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            output_parts.append(line)
+            clean = line.rstrip()
+            if clean:
+                post_event("log", clean)
+        exit_code = proc.wait()
+        output = "".join(output_parts)
+        if exit_code != 0:
+            patch_job("failed", error="Codex exited with status " + str(exit_code))
+            post_event("error", "Codex exited with status " + str(exit_code))
+            return exit_code
 
-    final_text = ""
-    final_path = pathlib.Path(final_message_path)
-    if final_path.exists():
-        final_text = final_path.read_text(encoding="utf-8", errors="replace")
-    result = parse_result(final_text + "\n" + output)
-    if not result or not result.get("story_id"):
-        patch_job("failed", error="Codex completed without a story_id result marker.")
-        post_event("error", "Codex completed without a story_id result marker.")
-        return 2
+        final_text = ""
+        final_path = pathlib.Path(final_message_path)
+        if final_path.exists():
+            final_text = final_path.read_text(encoding="utf-8", errors="replace")
+        result = parse_result(final_text + "\n" + output)
+        if not result or not result.get("story_id"):
+            patch_job("failed", error="Codex completed without a story_id result marker.")
+            post_event("error", "Codex completed without a story_id result marker.")
+            return 2
 
-    patch_job(
-        "complete",
-        story_id=int(result["story_id"]),
-        title=str(result.get("title") or ""),
-    )
-    post_event("complete", "Story created.", result)
-    return 0
+        patch_job(
+            "complete",
+            story_id=int(result["story_id"]),
+            title=str(result.get("title") or ""),
+        )
+        post_event("complete", "Story created.", result)
+        return 0
+    finally:
+        task_stop.set()
+        release_task()
+        post_event("status", "Sprite task hold released.")
 
 
 if __name__ == "__main__":

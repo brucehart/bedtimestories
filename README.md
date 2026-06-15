@@ -100,6 +100,11 @@ Optional vars:
 - `STORY_AGENT_SPRITE_WORKDIR` – defaults to `/home/sprite/bedtimestories/main`.
 - `STORY_AGENT_SPRITES_API_BASE` – defaults to `https://api.sprites.dev`.
 
+The runner creates a Sprite task hold while Codex is actively generating a story,
+refreshes it during the run, and releases it when the job completes or fails.
+Canceling a job also asks the Sprite to terminate the runner and delete that
+task hold, making the Sprite eligible to pause when idle.
+
 ### Security Notes
 
 - If `allowed_accounts` is empty, any Google account is treated as an `editor` (intentionally retained behavior; increases risk if the database is ever cleared).
