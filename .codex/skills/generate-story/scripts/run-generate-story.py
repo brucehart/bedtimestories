@@ -10,7 +10,7 @@ import sys
 import tempfile
 import uuid
 
-from story_media_common import load_default_secret_env, require_env
+from story_media_common import load_default_secret_env, require_env, story_api_user_agent
 
 
 DEFAULT_BASE_URL = "https://bedtimestories.bruce-hart.workers.dev"
@@ -41,7 +41,7 @@ def curl_json(args: list[str]) -> dict:
     # args: curl arguments excluding -sS; must include URL and any headers/body flags.
     out_path = tempfile.mktemp(prefix="story-curl-", suffix=".json", dir="/tmp")
     code = subprocess.run(
-        ["curl", "-sS", "-o", out_path, "-w", "%{http_code}", *args],
+        ["curl", "-sS", "-A", story_api_user_agent(), "-o", out_path, "-w", "%{http_code}", *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

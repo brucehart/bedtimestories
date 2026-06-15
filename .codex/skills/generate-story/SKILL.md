@@ -38,6 +38,7 @@ Required env vars:
 - `OPENAI_API_KEY` for `openai-media`, `openai-image`, or `openai-video`
   - `OPENAI_BEDTIME_STORY_KEY` is also accepted as a local alias by the bundled scripts
 - `STORY_API_BASE_URL` (optional, defaults to `https://bedtimestories.bruce-hart.workers.dev`)
+- `STORY_API_USER_AGENT` (optional, defaults to a browser-like user agent for Cloudflare Browser Integrity Check compatibility)
 
 The bundled scripts will also auto-load `$HOME/.config/secrets/codex.env` when these vars are not already exported.
 
@@ -276,12 +277,14 @@ Upload media:
 
 ```bash
 curl -s "${STORY_API_BASE_URL:-https://bedtimestories.bruce-hart.workers.dev}/api/media" \
+  -A "${STORY_API_USER_AGENT:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36}" \
   -H "X-Story-Token: $STORY_API_TOKEN" \
   -F "file=@/path/to/image.jpg"
 ```
 
 ```bash
 curl -s "${STORY_API_BASE_URL:-https://bedtimestories.bruce-hart.workers.dev}/api/media" \
+  -A "${STORY_API_USER_AGENT:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36}" \
   -H "X-Story-Token: $STORY_API_TOKEN" \
   -F "file=@/tmp/story-video-encoded.mp4"
 ```
@@ -290,6 +293,7 @@ Create story:
 
 ```bash
 curl -s "${STORY_API_BASE_URL:-https://bedtimestories.bruce-hart.workers.dev}/api/stories" \
+  -A "${STORY_API_USER_AGENT:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36}" \
   -H "X-Story-Token: $STORY_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{

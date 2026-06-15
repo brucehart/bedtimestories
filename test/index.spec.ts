@@ -743,6 +743,7 @@ describe('Story page', () => {
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('story-agent-');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('STORY_AGENT_TASK_NAME=');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain("printf '%s\\n'");
+                        expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('Mozilla/5.0');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).not.toContain('STORY_AGENT_ENV');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).not.toContain('& &&');
                         expect(agentState.events.some(event => event.message.includes('launch command accepted'))).toBe(true);
@@ -919,14 +920,22 @@ describe('Story page', () => {
         });
 
         it('passes Sprite reference image paths into Codex and generate-story', () => {
-                expect(STORY_AGENT_RUNNER).toContain('Reference images are attached to this Codex request');
+                expect(STORY_AGENT_RUNNER).toContain('Reference images are available at the /tmp paths above');
                 expect(STORY_AGENT_RUNNER).toContain('--ref-image');
-                expect(STORY_AGENT_RUNNER).toContain('cmd.extend(["--image", ref_path])');
+                expect(STORY_AGENT_RUNNER).not.toContain('cmd.extend(["--image", ref_path])');
+                expect(STORY_AGENT_RUNNER).not.toContain('STORY_AGENT_RESULT_JSON={');
+                expect(STORY_AGENT_RUNNER).not.toContain('"story_id":123');
                 expect(STORY_AGENT_RUNNER).toContain('output_dir / (str(ref.get("id", len(paths) + 1)) + "-" + safe_name)');
                 expect(STORY_AGENT_RUNNER).toContain('pty.openpty()');
                 expect(STORY_AGENT_RUNNER).toContain('os.write(');
                 expect(STORY_AGENT_RUNNER).not.toContain('stdin=subprocess.DEVNULL');
+                expect(STORY_AGENT_RUNNER).toContain('"exec"');
+                expect(STORY_AGENT_RUNNER).toContain('"--color"');
+                expect(STORY_AGENT_RUNNER).toContain('"--output-last-message"');
+                expect(STORY_AGENT_RUNNER).not.toContain('"--no-alt-screen"');
                 expect(STORY_AGENT_RUNNER).toContain('STORY_AGENT_TASK_NAME');
                 expect(STORY_AGENT_RUNNER).toContain('("story-agent-" + JOB_ID).lower()');
+                expect(STORY_AGENT_RUNNER).toContain('"User-Agent": USER_AGENT');
+                expect(STORY_AGENT_RUNNER).toContain('headers={"Authorization": "Bearer " + JOB_TOKEN, "User-Agent": USER_AGENT}');
         });
 });

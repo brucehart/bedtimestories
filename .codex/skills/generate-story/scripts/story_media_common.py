@@ -13,6 +13,10 @@ DEFAULT_SECRETS_ENV_PATH = pathlib.Path.home() / ".config" / "secrets" / "codex.
 ENV_ALIASES = {
     "OPENAI_API_KEY": ("OPENAI_BEDTIME_STORY_KEY",),
 }
+DEFAULT_STORY_API_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 
 def parse_env_value(raw: str) -> str:
@@ -68,6 +72,10 @@ def require_env(name: str) -> str:
     raise SystemExit(
         f"{name} is required (export it in the current environment or set it{alias_hint} in {DEFAULT_SECRETS_ENV_PATH})."
     )
+
+
+def story_api_user_agent() -> str:
+    return os.getenv("STORY_API_USER_AGENT", DEFAULT_STORY_API_USER_AGENT)
 
 
 def request_json(

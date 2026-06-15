@@ -101,6 +101,7 @@ Optional vars:
 - `STORY_AGENT_SPRITE_NAME` – defaults to `bedtime-stories`.
 - `STORY_AGENT_SPRITE_WORKDIR` – defaults to `/home/sprite/bedtimestories/main`.
 - `STORY_AGENT_SPRITES_API_BASE` – defaults to `https://api.sprites.dev`.
+- `STORY_API_USER_AGENT` – browser-like user agent used by Sprite-side story API calls; override only if Cloudflare Browser Integrity Check starts blocking the default.
 
 The runner creates a Sprite task hold while Codex is actively generating a story,
 refreshes it during the run, and releases it when the job completes or fails.
@@ -109,6 +110,11 @@ task hold, making the Sprite eligible to pause when idle.
 When reference images are included, the Worker stores them in R2, the runner
 downloads them into `/tmp` on the Sprite, attaches them to Codex, and instructs
 Codex to pass each path to `generate-story` as `--ref-image`.
+If Sprite logs show Cloudflare Error 1010 (`browser_signature_banned`) on
+`/api/agent` callbacks, deploy the current Worker code so the runner uses the
+browser-like user agent. If the account-level security rule still blocks the
+Sprite, disable Browser Integrity Check selectively for the authenticated
+automation API paths rather than disabling story-agent authentication.
 
 ### Security Notes
 
