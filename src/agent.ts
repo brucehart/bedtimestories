@@ -254,7 +254,7 @@ async function launchSpriteJob(env: Env, origin: string, jobId: string, callback
         `export STORY_AGENT_TASK_NAME=${quoteShell(taskName)}`,
         'export PYTHONUNBUFFERED=1'
     ];
-    const writeEnvCommand = `umask 077; printf '%s\\n' ${runnerEnvLines.map(quoteShell).join(' ')} > "$envfile"`;
+    const writeEnvCommand = `umask 077 && printf '%s\\n' ${runnerEnvLines.map(quoteShell).join(' ')} > "$envfile"`;
     const runScript = [
         `. ${quoteShell(envPath)}`,
         `rm -f ${quoteShell(envPath)}`,
@@ -270,7 +270,7 @@ async function launchSpriteJob(env: Env, origin: string, jobId: string, callback
         'chmod 700 "$runner"',
         writeEnvCommand,
         `printf '%s\\n' ${quoteShell('launcher: starting runner')} >> "$logfile"`,
-        `nohup bash -lc ${quoteShell(runScript)} >> "$logfile" 2>&1 &`,
+        `( nohup bash -lc ${quoteShell(runScript)} >> "$logfile" 2>&1 & )`,
         `printf '%s\\n' ${quoteShell('launcher: runner launch returned')} >> "$logfile"`
     ].join(' && ');
 

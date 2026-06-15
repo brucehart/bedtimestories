@@ -744,6 +744,7 @@ describe('Story page', () => {
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('STORY_AGENT_TASK_NAME=');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain("printf '%s\\n'");
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).not.toContain('STORY_AGENT_ENV');
+                        expect(launchUrl.searchParams.getAll('cmd').join(' ')).not.toContain('& &&');
                         expect(agentState.events.some(event => event.message.includes('launch command accepted'))).toBe(true);
                 } finally {
                         globalThis.fetch = originalFetch;
