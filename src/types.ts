@@ -21,6 +21,13 @@ export interface Env {
     CACHE_REFRESH_TOKEN?: string;
     CACHE_REFRESH_DAYS?: string;
     STORY_API_TOKEN?: string;
+    STORY_AGENT_ALLOWED_EMAILS?: string;
+    AGENT_ALLOWED_EMAILS?: string;
+    SPRITES_API_TOKEN?: string;
+    SPRITE_API_TOKEN?: string;
+    STORY_AGENT_SPRITES_API_BASE?: string;
+    STORY_AGENT_SPRITE_NAME?: string;
+    STORY_AGENT_SPRITE_WORKDIR?: string;
 }
 
 export interface AuthInfo {
