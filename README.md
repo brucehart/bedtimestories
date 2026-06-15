@@ -55,6 +55,9 @@ CREATE TABLE allowed_accounts (
 );
 ```
 
+Agentic story generation from `/manage` also requires the tables in
+`db/story_agent_tables.sql`.
+
 ## Deployment
 
 Deploy the worker to Cloudflare with:
@@ -81,11 +84,28 @@ manage access. If the table is empty, any account is permitted as an editor.
 The Google OAuth client credentials should be stored as secrets named
 `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 
+### Agentic Story Generation
+
+The `/manage` page can launch story-generation jobs in a preconfigured Sprite.
+Apply `db/story_agent_tables.sql`, keep the `bedtime-stories` Sprite updated
+with the project and `generate-story` skill, and configure these Worker secrets:
+
+- `SPRITES_API_TOKEN` – Sprites API token used by the Worker to start commands.
+- `STORY_AGENT_ALLOWED_EMAILS` – comma-separated editor emails allowed to run costly agent jobs.
+- `STORY_API_TOKEN` – existing story automation token used by the Sprite runner.
+
+Optional vars:
+
+- `STORY_AGENT_SPRITE_NAME` – defaults to `bedtime-stories`.
+- `STORY_AGENT_SPRITE_WORKDIR` – defaults to `/home/sprite/bedtimestories/main`.
+- `STORY_AGENT_SPRITES_API_BASE` – defaults to `https://api.sprites.dev`.
+
 ### Security Notes
 
 - If `allowed_accounts` is empty, any Google account is treated as an `editor` (intentionally retained behavior; increases risk if the database is ever cleared).
 - The admin UI currently loads React from `unpkg.com` and uses inline scripts. This is a supply-chain risk (a compromised CDN response could perform authenticated actions). Recommended hardening is to self-host dependencies and move inline scripts into local JS files, then enforce a strict CSP.
 - `GET /update-cache` requires `CACHE_REFRESH_TOKEN` (Bearer auth). Do not deploy without setting it.
+- Story-generation jobs require both an editor session and `STORY_AGENT_ALLOWED_EMAILS`; leave the allowlist unset to disable this high-cost surface.
 
 ## API Summary
 
@@ -102,6 +122,10 @@ The worker exposes the following endpoints:
 - `POST /stories` – create a new story (multipart form data, fields: `title`, `content`, `date`, optional `image`)
 - `PUT /stories/:id` – update an existing story (multipart form data, fields: `title`, `content`, `date`, optional `image`)
 - `DELETE /stories/:id` – remove a story
+- `POST /agent/jobs` – create an authenticated story-generation job
+- `GET /agent/jobs/:id/events` – replay job events as an SSE stream
+- `POST /agent/jobs/:id/messages` – queue feedback for the running job
+- `POST /agent/jobs/:id/cancel` – cancel an active story-generation job
 
 ## License
 

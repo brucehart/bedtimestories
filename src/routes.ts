@@ -2,6 +2,21 @@ import { AuthInfo, Env, Route, Story } from './types';
 import { markdownToHtml, easternNowIso, htmlToPlainText } from './utils';
 import { signSession, signState, verifyState, verifySession, SESSION_MAXAGE } from './session';
 import { verifyGoogleToken, getAccountRole, requireAuth } from './auth';
+import { timingSafeEqualString } from './security';
+import {
+    cancelAgentJob,
+    createAgentJob,
+    createAgentMessage,
+    createRunnerEvent,
+    getAgentBootstrap,
+    getAgentEvents,
+    getAgentJob,
+    getAgentReference,
+    getRunnerMessages,
+    getRunnerScript,
+    listAgentJobs,
+    updateRunnerJob
+} from './agent';
 
 const CACHE_REFRESH_DEFAULT_DAYS = 5;
 const CACHE_REFRESH_MAX_DAYS = 30;
@@ -61,7 +76,7 @@ function requireStoryToken(request: Request, env: Env): Response | null {
         return new Response('Story API token not configured', { status: 503 });
     }
     const providedToken = request.headers.get(STORY_TOKEN_HEADER);
-    if (!providedToken || providedToken !== requiredToken) {
+    if (!providedToken || !timingSafeEqualString(providedToken, requiredToken)) {
         return new Response('Unauthorized', { status: 401 });
     }
     return null;
@@ -408,6 +423,38 @@ const preAuthRoutes: Route[] = [
     },
     {
         method: 'GET',
+        pattern: /^\/api\/agent\/jobs\/([A-Za-z0-9_-]+)\/runner\.py$/,
+        handler: async (request, env, _ctx, match) => getRunnerScript(request, env, match[1])
+    },
+    {
+        method: 'GET',
+        pattern: /^\/api\/agent\/jobs\/([A-Za-z0-9_-]+)\/bootstrap$/,
+        handler: async (request, env, _ctx, match) => getAgentBootstrap(request, env, match[1])
+    },
+    {
+        method: 'GET',
+        pattern: /^\/api\/agent\/jobs\/([A-Za-z0-9_-]+)\/refs\/(\d+)$/,
+        handler: async (request, env, _ctx, match) =>
+            getAgentReference(request, env, match[1], Number(match[2]))
+    },
+    {
+        method: 'GET',
+        pattern: /^\/api\/agent\/jobs\/([A-Za-z0-9_-]+)\/messages$/,
+        handler: async (request, env, _ctx, match, url) =>
+            getRunnerMessages(request, env, match[1], url)
+    },
+    {
+        method: 'POST',
+        pattern: /^\/api\/agent\/jobs\/([A-Za-z0-9_-]+)\/events$/,
+        handler: async (request, env, _ctx, match) => createRunnerEvent(request, env, match[1])
+    },
+    {
+        method: 'PATCH',
+        pattern: /^\/api\/agent\/jobs\/([A-Za-z0-9_-]+)$/,
+        handler: async (request, env, _ctx, match) => updateRunnerJob(request, env, match[1])
+    },
+    {
+        method: 'GET',
         pattern: /^\/login$/,
         handler: async (_request, env, _ctx, _match, url) => {
             const redirectUri = env.OAUTH_CALLBACK_URL;
@@ -506,6 +553,42 @@ const routes: Route[] = [
         method: 'GET',
         pattern: /^\/bedtime-stories-icon\.png$/,
         handler: (request, env) => env.ASSETS.fetch(request)
+    },
+    {
+        method: 'POST',
+        pattern: /^\/agent\/jobs$/,
+        handler: async (request, env, ctx, _match, _url, auth) =>
+            createAgentJob(request, env, ctx, auth)
+    },
+    {
+        method: 'GET',
+        pattern: /^\/agent\/jobs$/,
+        handler: async (request, env, _ctx, _match, _url, auth) =>
+            listAgentJobs(request, env, auth)
+    },
+    {
+        method: 'GET',
+        pattern: /^\/agent\/jobs\/([A-Za-z0-9_-]+)$/,
+        handler: async (request, env, _ctx, match, _url, auth) =>
+            getAgentJob(request, env, auth, match[1])
+    },
+    {
+        method: 'GET',
+        pattern: /^\/agent\/jobs\/([A-Za-z0-9_-]+)\/events$/,
+        handler: async (request, env, _ctx, match, url, auth) =>
+            getAgentEvents(request, env, auth, match[1], url)
+    },
+    {
+        method: 'POST',
+        pattern: /^\/agent\/jobs\/([A-Za-z0-9_-]+)\/messages$/,
+        handler: async (request, env, _ctx, match, _url, auth) =>
+            createAgentMessage(request, env, auth, match[1])
+    },
+    {
+        method: 'POST',
+        pattern: /^\/agent\/jobs\/([A-Za-z0-9_-]+)\/cancel$/,
+        handler: async (request, env, ctx, match, _url, auth) =>
+            cancelAgentJob(request, env, ctx, auth, match[1])
     },
     {
         method: 'GET',

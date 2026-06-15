@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import worker, { signSession, verifySession, SESSION_MAXAGE } from '../src/index';
 import { getAccountRole } from '../src/auth';
 import { signState } from '../src/session';
+import { sha256Hex } from '../src/security';
 
 interface Story {
     id: number;
@@ -16,6 +17,59 @@ interface Story {
 }
 
 type Account = { email: string; role: 'reader' | 'editor' };
+
+interface AgentJob {
+    id: string;
+    requested_by: string;
+    prompt: string;
+    target_date: string | null;
+    status: string;
+    sprite_name: string;
+    sprite_session_id: string | null;
+    story_id: number | null;
+    title: string | null;
+    error: string | null;
+    callback_token_hash: string;
+    created: string | null;
+    updated: string | null;
+    started: string | null;
+    completed: string | null;
+}
+
+interface AgentRef {
+    id: number;
+    job_id: string;
+    r2_key: string;
+    filename: string;
+    content_type: string;
+}
+
+interface AgentEvent {
+    id: number;
+    job_id: string;
+    event_type: string;
+    message: string;
+    metadata: string | null;
+    created: string | null;
+}
+
+interface AgentMessage {
+    id: number;
+    job_id: string;
+    author_email: string;
+    content: string;
+    created: string | null;
+}
+
+interface AgentState {
+    jobs: AgentJob[];
+    refs: AgentRef[];
+    events: AgentEvent[];
+    messages: AgentMessage[];
+    nextRefId: number;
+    nextEventId: number;
+    nextMessageId: number;
+}
 
 function normalizeAccounts(accounts: (string | Account)[]): Account[] {
     return accounts.map(a =>
@@ -44,7 +98,26 @@ function createAllowedDb(accounts: (string | Account)[]) {
     } as unknown as D1Database;
 }
 
-function createDb(accounts: (string | Account)[], stories: Story[]) {
+function updateAgentJobFromQuery(query: string, params: any[], job: AgentJob) {
+    const setPart = query.match(/SET (.+) WHERE id = \?\d+/)?.[1] || '';
+    const assignments = setPart.split(',').map(part => part.trim()).filter(Boolean);
+    let paramIndex = 0;
+    const now = new Date().toISOString();
+    for (const assignment of assignments) {
+        const field = assignment.split('=')[0].trim() as keyof AgentJob;
+        if (assignment.includes('?')) {
+            (job as any)[field] = params[paramIndex++];
+        } else if (field === 'updated') {
+            job.updated = now;
+        } else if (field === 'started') {
+            job.started = job.started || now;
+        } else if (field === 'completed') {
+            job.completed = job.completed || now;
+        }
+    }
+}
+
+function createDb(accounts: (string | Account)[], stories: Story[], agentState?: AgentState) {
     const acc = normalizeAccounts(accounts);
     return {
         prepare(query: string) {
@@ -68,12 +141,116 @@ function createDb(accounts: (string | Account)[], stories: Story[]) {
                                 const id = params[0];
                                 return (stories.find(s => s.id === id) ?? null) as T;
                             }
+                            if (agentState && query.startsWith('SELECT * FROM story_agent_jobs WHERE id = ?1')) {
+                                return (agentState.jobs.find(job => job.id === params[0]) ?? null) as T;
+                            }
+                            if (agentState && query.includes('FROM story_agent_refs WHERE job_id = ?1 AND id = ?2')) {
+                                return (agentState.refs.find(ref => ref.job_id === params[0] && ref.id === params[1]) ?? null) as T;
+                            }
                             return null as T;
                         },
                         async all<T>() {
+                            if (agentState && query.includes('FROM story_agent_jobs WHERE LOWER(requested_by)')) {
+                                const email = (params[0] as string).toLowerCase();
+                                return {
+                                    results: agentState.jobs
+                                        .filter(job => job.requested_by.toLowerCase() === email)
+                                        .sort((a, b) => (b.created || '').localeCompare(a.created || ''))
+                                        .slice(0, 10) as T[]
+                                };
+                            }
+                            if (agentState && query.includes('FROM story_agent_events WHERE job_id = ?1')) {
+                                const jobId = params[0] as string;
+                                const after = params[1] as number;
+                                return {
+                                    results: agentState.events
+                                        .filter(event => event.job_id === jobId && event.id > after)
+                                        .sort((a, b) => a.id - b.id)
+                                        .slice(0, 100)
+                                        .map(({ id, event_type, message, metadata, created }) => ({ id, event_type, message, metadata, created })) as T[]
+                                };
+                            }
+                            if (agentState && query.includes('FROM story_agent_refs WHERE job_id = ?1 ORDER BY id ASC')) {
+                                const jobId = params[0] as string;
+                                return {
+                                    results: agentState.refs
+                                        .filter(ref => ref.job_id === jobId)
+                                        .sort((a, b) => a.id - b.id)
+                                        .map(({ id, filename, content_type }) => ({ id, filename, content_type })) as T[]
+                                };
+                            }
+                            if (agentState && query.includes('FROM story_agent_messages WHERE job_id = ?1')) {
+                                const jobId = params[0] as string;
+                                const after = params[1] as number;
+                                return {
+                                    results: agentState.messages
+                                        .filter(message => message.job_id === jobId && message.id > after)
+                                        .sort((a, b) => a.id - b.id)
+                                        .slice(0, 25)
+                                        .map(({ id, author_email, content, created }) => ({ id, author_email, content, created })) as T[]
+                                };
+                            }
                             return { results: stories as T[] };
                         },
                         async run() {
+                            if (agentState && query.startsWith('INSERT INTO story_agent_jobs')) {
+                                const now = new Date().toISOString();
+                                agentState.jobs.push({
+                                    id: params[0],
+                                    requested_by: params[1],
+                                    prompt: params[2],
+                                    target_date: params[3],
+                                    status: params[4],
+                                    sprite_name: params[5],
+                                    callback_token_hash: params[6],
+                                    sprite_session_id: null,
+                                    story_id: null,
+                                    title: null,
+                                    error: null,
+                                    created: now,
+                                    updated: now,
+                                    started: null,
+                                    completed: null
+                                });
+                                return { meta: { last_row_id: 1 } };
+                            }
+                            if (agentState && query.startsWith('INSERT INTO story_agent_refs')) {
+                                agentState.refs.push({
+                                    id: agentState.nextRefId++,
+                                    job_id: params[0],
+                                    r2_key: params[1],
+                                    filename: params[2],
+                                    content_type: params[3]
+                                });
+                                return { meta: { last_row_id: agentState.nextRefId - 1 } };
+                            }
+                            if (agentState && query.startsWith('INSERT INTO story_agent_events')) {
+                                agentState.events.push({
+                                    id: agentState.nextEventId++,
+                                    job_id: params[0],
+                                    event_type: params[1],
+                                    message: params[2],
+                                    metadata: params[3],
+                                    created: new Date().toISOString()
+                                });
+                                return { meta: { last_row_id: agentState.nextEventId - 1 } };
+                            }
+                            if (agentState && query.startsWith('INSERT INTO story_agent_messages')) {
+                                agentState.messages.push({
+                                    id: agentState.nextMessageId++,
+                                    job_id: params[0],
+                                    author_email: params[1],
+                                    content: params[2],
+                                    created: new Date().toISOString()
+                                });
+                                return { meta: { last_row_id: agentState.nextMessageId - 1 } };
+                            }
+                            if (agentState && query.startsWith('UPDATE story_agent_jobs SET')) {
+                                const jobId = params[params.length - 1];
+                                const job = agentState.jobs.find(j => j.id === jobId);
+                                if (job) updateAgentJobFromQuery(query, params, job);
+                                return { meta: { last_row_id: 1 } };
+                            }
                             return { meta: { last_row_id: 1 } };
                         }
                     };
@@ -116,6 +293,68 @@ function createImagesPutSpy() {
         }
     } as unknown as R2Bucket;
     return { bucket, getLastPut: () => lastPut };
+}
+
+function createAgentImages() {
+    const store = new Map<string, { value: Uint8Array; contentType: string }>();
+    const bucket = {
+        async put(key: string, value: unknown, options?: any) {
+            let bytes = new Uint8Array();
+            if (value instanceof ReadableStream) {
+                const chunks: Uint8Array[] = [];
+                const reader = value.getReader();
+                while (true) {
+                    const { done, value: chunk } = await reader.read();
+                    if (done) break;
+                    chunks.push(chunk);
+                }
+                const size = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+                bytes = new Uint8Array(size);
+                let offset = 0;
+                for (const chunk of chunks) {
+                    bytes.set(chunk, offset);
+                    offset += chunk.byteLength;
+                }
+            }
+            store.set(key, {
+                value: bytes,
+                contentType: options?.httpMetadata?.contentType || 'application/octet-stream'
+            });
+        },
+        async get(key: string) {
+            const item = store.get(key);
+            if (!item) return null;
+            return {
+                body: new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(item.value);
+                        controller.close();
+                    }
+                }),
+                size: item.value.byteLength,
+                writeHttpMetadata(headers: Headers) {
+                    headers.set('Content-Type', item.contentType);
+                },
+                httpEtag: 'agent-etag'
+            } as unknown as R2ObjectBody;
+        },
+        async delete(key: string) {
+            store.delete(key);
+        }
+    } as unknown as R2Bucket;
+    return { bucket, store };
+}
+
+function createAgentState(): AgentState {
+    return {
+        jobs: [],
+        refs: [],
+        events: [],
+        messages: [],
+        nextRefId: 1,
+        nextEventId: 1,
+        nextMessageId: 1
+    };
 }
 
 function createImagesWithCounter(store: Record<string, string>) {
@@ -185,6 +424,13 @@ describe('Story page', () => {
                 env.DB = createDb(['test@example.com'], []);
                 env.IMAGES = createImages({});
                 env.PUBLIC_VIEW = 'false';
+                delete (env as any).STORY_AGENT_ALLOWED_EMAILS;
+                delete (env as any).AGENT_ALLOWED_EMAILS;
+                delete (env as any).SPRITES_API_TOKEN;
+                delete (env as any).SPRITE_API_TOKEN;
+                delete (env as any).STORY_AGENT_SPRITES_API_BASE;
+                delete (env as any).STORY_AGENT_SPRITE_NAME;
+                delete (env as any).STORY_AGENT_SPRITE_WORKDIR;
         });
 
         it('signs and verifies JWTs', async () => {
@@ -432,5 +678,201 @@ describe('Story page', () => {
                 data.set('date', 'not-a-date');
                 const response = await workerFetch(new Request('https://example.com/stories', { method: 'POST', body: data, headers: { cookie: `session=${jwt}` } }));
                 expect(response.status).toBe(400);
+        });
+
+        it('requires the separate story agent allowlist for agent endpoints', async () => {
+                const agentState = createAgentState();
+                env.DB = createDb(['test@example.com'], [], agentState);
+                const jwt = await signSession('test@example.com', env);
+
+                let response = await workerFetch('https://example.com/agent/jobs', { headers: { cookie: `session=${jwt}` } });
+                expect(response.status).toBe(503);
+
+                env.STORY_AGENT_ALLOWED_EMAILS = 'owner@example.com';
+                response = await workerFetch('https://example.com/agent/jobs', { headers: { cookie: `session=${jwt}` } });
+                expect(response.status).toBe(403);
+
+                env.STORY_AGENT_ALLOWED_EMAILS = 'test@example.com';
+                response = await workerFetch('https://example.com/agent/jobs', { headers: { cookie: `session=${jwt}` } });
+                expect(response.status).toBe(200);
+        });
+
+        it('creates story agent jobs and launches the configured Sprite', async () => {
+                const originalFetch = globalThis.fetch;
+                const spriteRequests: string[] = [];
+                globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+                        if (url.startsWith('https://api.sprites.dev/')) {
+                                spriteRequests.push(url);
+                                expect(init?.headers).toEqual({ Authorization: 'Bearer sprites-token' });
+                                return Response.json({ ok: true });
+                        }
+                        return originalFetch(input as any, init);
+                }) as any;
+
+                try {
+                        const agentState = createAgentState();
+                        const { bucket, store } = createAgentImages();
+                        env.DB = createDb(['test@example.com'], [], agentState);
+                        env.IMAGES = bucket;
+                        env.STORY_AGENT_ALLOWED_EMAILS = 'test@example.com';
+                        env.SPRITES_API_TOKEN = 'sprites-token';
+                        const jwt = await signSession('test@example.com', env);
+                        const data = new FormData();
+                        data.set('prompt', 'A cozy moon train story');
+                        data.set('date', '2026-06-16');
+                        data.append('ref_images', new File([new Uint8Array([1, 2, 3])], 'moon.jpg', { type: 'image/jpeg' }));
+
+                        const response = await workerFetch(new Request('https://example.com/agent/jobs', {
+                                method: 'POST',
+                                body: data,
+                                headers: { cookie: `session=${jwt}` }
+                        }));
+                        expect(response.status).toBe(202);
+                        const body = await response.json<any>();
+                        expect(body.job.status).toBe('starting');
+                        expect(agentState.jobs).toHaveLength(1);
+                        expect(agentState.jobs[0].status).toBe('starting');
+                        expect(agentState.jobs[0].requested_by).toBe('test@example.com');
+                        expect(agentState.refs).toHaveLength(1);
+                        expect(store.size).toBe(1);
+                        expect(spriteRequests).toHaveLength(1);
+                        const launchUrl = new URL(spriteRequests[0]);
+                        expect(launchUrl.pathname).toBe('/v1/sprites/bedtime-stories/exec');
+                        expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('story-agent-');
+                        expect(agentState.events.some(event => event.message.includes('launch command accepted'))).toBe(true);
+                } finally {
+                        globalThis.fetch = originalFetch;
+                }
+        });
+
+        it('authenticates runner callbacks with the per-job token', async () => {
+                const token = 'runner-token';
+                const jobId = 'job_1234567890123456';
+                const agentState = createAgentState();
+                agentState.jobs.push({
+                        id: jobId,
+                        requested_by: 'test@example.com',
+                        prompt: 'A small garden rocket',
+                        target_date: '2026-06-16',
+                        status: 'running',
+                        sprite_name: 'bedtime-stories',
+                        sprite_session_id: null,
+                        story_id: null,
+                        title: null,
+                        error: null,
+                        callback_token_hash: await sha256Hex(token),
+                        created: new Date().toISOString(),
+                        updated: new Date().toISOString(),
+                        started: null,
+                        completed: null
+                });
+                agentState.refs.push({ id: 1, job_id: jobId, r2_key: 'ref.jpg', filename: 'ref.jpg', content_type: 'image/jpeg' });
+                env.DB = createDb(['test@example.com'], [], agentState);
+                env.IMAGES = createImages({ 'ref.jpg': 'ref-data' });
+                env.STORY_AGENT_ALLOWED_EMAILS = 'test@example.com';
+                const jwt = await signSession('test@example.com', env);
+
+                let response = await workerFetch(`https://example.com/api/agent/jobs/${jobId}/bootstrap`);
+                expect(response.status).toBe(401);
+
+                response = await workerFetch(`https://example.com/api/agent/jobs/${jobId}/bootstrap`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                });
+                expect(response.status).toBe(200);
+                const bootstrap = await response.json<any>();
+                expect(bootstrap.prompt).toBe('A small garden rocket');
+                expect(bootstrap.refs[0].url).toBe(`/api/agent/jobs/${jobId}/refs/1`);
+
+                response = await workerFetch(`https://example.com/api/agent/jobs/${jobId}/refs/1`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                });
+                expect(await response.text()).toBe('ref-data');
+
+                response = await workerFetch(`https://example.com/agent/jobs/${jobId}/messages`, {
+                        method: 'POST',
+                        headers: { cookie: `session=${jwt}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content: 'Make it gentler.' })
+                });
+                expect(response.status).toBe(200);
+
+                response = await workerFetch(`https://example.com/api/agent/jobs/${jobId}/messages?after=0`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                });
+                const messages = await response.json<any>();
+                expect(messages.messages[0].content).toBe('Make it gentler.');
+
+                response = await workerFetch(`https://example.com/api/agent/jobs/${jobId}/events`, {
+                        method: 'POST',
+                        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ type: 'log', message: 'working' })
+                });
+                expect(response.status).toBe(200);
+
+                response = await workerFetch(`https://example.com/api/agent/jobs/${jobId}`, {
+                        method: 'PATCH',
+                        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status: 'complete', story_id: 42, title: 'Garden Rocket' })
+                });
+                expect(response.status).toBe(200);
+                expect(agentState.jobs[0].status).toBe('complete');
+                expect(agentState.jobs[0].story_id).toBe(42);
+
+                response = await workerFetch(`https://example.com/agent/jobs/${jobId}/events`, {
+                        headers: { cookie: `session=${jwt}` }
+                });
+                const events = await response.text();
+                expect(events).toContain('event: log');
+                expect(events).toContain('event: complete');
+        });
+
+        it('cancels active story agent jobs and asks Sprite to stop the runner', async () => {
+                const originalFetch = globalThis.fetch;
+                const spriteRequests: string[] = [];
+                globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+                        if (url.startsWith('https://api.sprites.dev/')) {
+                                spriteRequests.push(url);
+                                return Response.json({ ok: true });
+                        }
+                        return originalFetch(input as any, init);
+                }) as any;
+
+                try {
+                        const jobId = 'job_abcdef1234567890';
+                        const agentState = createAgentState();
+                        agentState.jobs.push({
+                                id: jobId,
+                                requested_by: 'test@example.com',
+                                prompt: 'A train story',
+                                target_date: null,
+                                status: 'running',
+                                sprite_name: 'bedtime-stories',
+                                sprite_session_id: null,
+                                story_id: null,
+                                title: null,
+                                error: null,
+                                callback_token_hash: await sha256Hex('runner-token'),
+                                created: new Date().toISOString(),
+                                updated: new Date().toISOString(),
+                                started: null,
+                                completed: null
+                        });
+                        env.DB = createDb(['test@example.com'], [], agentState);
+                        env.STORY_AGENT_ALLOWED_EMAILS = 'test@example.com';
+                        env.SPRITES_API_TOKEN = 'sprites-token';
+                        const jwt = await signSession('test@example.com', env);
+
+                        const response = await workerFetch(`https://example.com/agent/jobs/${jobId}/cancel`, {
+                                method: 'POST',
+                                headers: { cookie: `session=${jwt}` }
+                        });
+                        expect(response.status).toBe(200);
+                        expect(agentState.jobs[0].status).toBe('canceled');
+                        expect(spriteRequests).toHaveLength(1);
+                        expect(new URL(spriteRequests[0]).searchParams.getAll('cmd').join(' ')).toContain(jobId);
+                } finally {
+                        globalThis.fetch = originalFetch;
+                }
         });
 });
