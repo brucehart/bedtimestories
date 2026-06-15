@@ -6,6 +6,12 @@ const DEFAULT_SPRITES_API_BASE = 'https://api.sprites.dev';
 const DEFAULT_SPRITE_NAME = 'bedtime-stories';
 const DEFAULT_SPRITE_WORKDIR = '/home/sprite/bedtimestories/main';
 
+// Cloudflare's Browser Integrity Check blocks the default curl/urllib
+// User-Agent with Error 1010 (browser_signature_banned). The Sprite runner and
+// its launcher must present a normal browser User-Agent when calling the Worker.
+const SPRITE_RUNNER_USER_AGENT =
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
 const MAX_AGENT_PROMPT_LENGTH = 4000;
 const MAX_AGENT_MESSAGE_LENGTH = 2000;
 const MAX_AGENT_REF_IMAGES = 3;
@@ -255,6 +261,15 @@ async function launchSpriteJob(env: Env, origin: string, jobId: string, callback
         'export PYTHONUNBUFFERED=1'
     ];
     const writeEnvCommand = `umask 077 && printf '%s\\n' ${runnerEnvLines.map(quoteShell).join(' ')} > "$envfile"`;
+    // Acquire the Sprite task hold from the launcher itself, before the exec
+    // session disconnects. A POST /exec session reaps its process group shortly
+    // after the foreground command returns, so the hold has to exist before then
+    // to bridge the gap until the runner's own heartbeat takes over.
+    const holdTaskCommand =
+        `curl -fsS --unix-socket /.sprite/api.sock -X PUT ` +
+        `-H ${quoteShell('Content-Type: application/json')} ` +
+        `${quoteShell(`http://sprite/v1/tasks/${taskName}`)} ` +
+        `-d ${quoteShell(JSON.stringify({ expire: '5m' }))} >> "$logfile" 2>&1`;
     const runScript = [
         `. ${quoteShell(envPath)}`,
         `rm -f ${quoteShell(envPath)}`,
@@ -266,11 +281,17 @@ async function launchSpriteJob(env: Env, origin: string, jobId: string, callback
         `logfile=${quoteShell(logPath)}`,
         ': > "$logfile"',
         `printf '%s\\n' ${quoteShell('launcher: downloading runner')} >> "$logfile"`,
-        `curl -fsS -H ${quoteShell(`Authorization: Bearer ${callbackToken}`)} ${quoteShell(`${jobUrl}/runner.py`)} -o "$runner" >> "$logfile" 2>&1`,
+        `curl -fsS -A ${quoteShell(SPRITE_RUNNER_USER_AGENT)} -H ${quoteShell(`Authorization: Bearer ${callbackToken}`)} ${quoteShell(`${jobUrl}/runner.py`)} -o "$runner" >> "$logfile" 2>&1`,
         'chmod 700 "$runner"',
         writeEnvCommand,
+        `printf '%s\\n' ${quoteShell('launcher: acquiring sprite task hold')} >> "$logfile"`,
+        holdTaskCommand,
         `printf '%s\\n' ${quoteShell('launcher: starting runner')} >> "$logfile"`,
-        `( nohup bash -lc ${quoteShell(runScript)} >> "$logfile" 2>&1 & )`,
+        // setsid detaches the runner into its own session/process group so it is
+        // not killed when this exec session's process group is reaped on
+        // disconnect. nohup ignores the SIGHUP that disconnect would deliver.
+        // The subshell keeps the trailing `&` from breaking the `&&` chain.
+        `( setsid nohup bash -lc ${quoteShell(runScript)} < /dev/null >> "$logfile" 2>&1 & )`,
         `printf '%s\\n' ${quoteShell('launcher: runner launch returned')} >> "$logfile"`
     ].join(' && ');
 

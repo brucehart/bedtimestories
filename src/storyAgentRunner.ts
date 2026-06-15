@@ -27,6 +27,13 @@ TASK_NAME = os.environ.get("STORY_AGENT_TASK_NAME") or re.sub(
     ("story-agent-" + JOB_ID).lower(),
 ).strip("-")
 TASK_EXPIRE = "5m"
+# Cloudflare's Browser Integrity Check rejects the default "Python-urllib/x.y"
+# User-Agent with Error 1010 (browser_signature_banned), which silently blocks
+# every callback to the Worker. Present a normal browser User-Agent instead.
+USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
 
 
@@ -64,6 +71,7 @@ def api_request(method, path, payload=None, timeout=30):
     headers = {
         "Authorization": "Bearer " + JOB_TOKEN,
         "Accept": "application/json",
+        "User-Agent": USER_AGENT,
     }
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
@@ -163,7 +171,7 @@ def download_refs(refs):
         req = urllib.request.Request(
             BASE_URL + ref["url"],
             method="GET",
-            headers={"Authorization": "Bearer " + JOB_TOKEN},
+            headers={"Authorization": "Bearer " + JOB_TOKEN, "User-Agent": USER_AGENT},
         )
         with urllib.request.urlopen(req, timeout=60) as response:
             output_path.write_bytes(response.read())
