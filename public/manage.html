@@ -38,6 +38,9 @@
         .agent-log { margin-top: 0.75rem; padding: 0.75rem; background: #111; color: #eee; border-radius: 6px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.85rem; line-height: 1.35; max-height: 18rem; overflow: auto; white-space: pre-wrap; }
         .agent-chat { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
         .agent-chat input { flex: 1; min-width: 0; }
+        .agent-files { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+        .agent-file { display: inline-flex; align-items: center; gap: 0.25rem; border: 1px solid #ccc; border-radius: 6px; padding: 0.2rem 0.4rem; background: white; font-size: 0.85rem; }
+        .agent-file button { border: 0; background: transparent; cursor: pointer; font-weight: bold; line-height: 1; }
         .agent-error { color: #b00020; margin-top: 0.5rem; }
         .agent-review { display: inline-block; margin-top: 0.5rem; }
         @media (max-width: 560px) {
@@ -91,6 +94,9 @@
             if (!value) return '';
             return value.length > 80 ? value.slice(0, 77) + '...' : value;
         }
+        function imageFilesFromList(list) {
+            return Array.from(list || []).filter(file => file && file.type && file.type.startsWith('image/'));
+        }
         function App() {
             const [stories, setStories] = useState([]);
             const [page, setPage] = useState(1);
@@ -101,6 +107,7 @@
             const [agentPrompt, setAgentPrompt] = useState('');
             const [agentDate, setAgentDate] = useState('');
             const [agentFiles, setAgentFiles] = useState([]);
+            const [agentFileInputKey, setAgentFileInputKey] = useState(0);
             const [agentJobs, setAgentJobs] = useState([]);
             const [activeJob, setActiveJob] = useState(null);
             const [agentEvents, setAgentEvents] = useState([]);
@@ -200,6 +207,49 @@
                 load(1, q, value);
             };
 
+            const addAgentFiles = files => {
+                const images = imageFilesFromList(files);
+                if (images.length === 0) return;
+                setAgentError('');
+                setAgentFiles(current => {
+                    const next = current.concat(images).slice(0, 3);
+                    if (current.length + images.length > 3) {
+                        setAgentError('Only the first 3 reference images will be used.');
+                    }
+                    return next;
+                });
+            };
+
+            const onAgentFileChange = e => {
+                addAgentFiles(e.target.files || []);
+                setAgentFileInputKey(value => value + 1);
+            };
+
+            const onAgentPromptPaste = e => {
+                const pastedFiles = imageFilesFromList(e.clipboardData && e.clipboardData.files);
+                if (pastedFiles.length > 0) {
+                    addAgentFiles(pastedFiles);
+                    if (!e.clipboardData.getData('text')) {
+                        e.preventDefault();
+                    }
+                    return;
+                }
+                const itemFiles = Array.from((e.clipboardData && e.clipboardData.items) || [])
+                    .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+                    .map(item => item.getAsFile())
+                    .filter(Boolean);
+                if (itemFiles.length > 0) {
+                    addAgentFiles(itemFiles);
+                    if (!e.clipboardData.getData('text')) {
+                        e.preventDefault();
+                    }
+                }
+            };
+
+            const removeAgentFile = index => {
+                setAgentFiles(files => files.filter((_, i) => i !== index));
+            };
+
             const startAgentJob = async e => {
                 e.preventDefault();
                 setAgentError('');
@@ -220,6 +270,7 @@
                     setAgentPrompt('');
                     setAgentDate('');
                     setAgentFiles([]);
+                    setAgentFileInputKey(value => value + 1);
                 } finally {
                     setAgentBusy(false);
                 }
@@ -256,12 +307,18 @@
                 agentAvailable ? React.createElement('section', { key: 'agent', className: 'agent-panel' }, [
                     React.createElement('h2', { key: 'h' }, 'Generate with Codex'),
                     React.createElement('form', { key: 'f', className: 'agent-form', onSubmit: startAgentJob }, [
-                        React.createElement('textarea', { key: 'p', placeholder: 'Story idea', value: agentPrompt, required: true, maxLength: 4000, onChange: e => setAgentPrompt(e.target.value) }),
+                        React.createElement('textarea', { key: 'p', placeholder: 'Story idea', value: agentPrompt, required: true, maxLength: 4000, onPaste: onAgentPromptPaste, onChange: e => setAgentPrompt(e.target.value) }),
                         React.createElement('div', { key: 'r', className: 'agent-row' }, [
                             React.createElement('input', { key: 'd', type: 'date', value: agentDate, onChange: e => setAgentDate(e.target.value) }),
-                            React.createElement('input', { key: 'i', type: 'file', accept: 'image/jpeg,image/png,image/webp', multiple: true, onChange: e => setAgentFiles(Array.from(e.target.files || []).slice(0, 3)) }),
+                            React.createElement('input', { key: 'i' + agentFileInputKey, type: 'file', accept: 'image/jpeg,image/png,image/webp', multiple: true, onChange: onAgentFileChange }),
                             React.createElement('button', { key: 'b', type: 'submit', disabled: agentBusy || !agentPrompt.trim() }, agentBusy ? 'Starting...' : 'Start')
-                        ])
+                        ]),
+                        agentFiles.length ? React.createElement('div', { key: 'files', className: 'agent-files' }, agentFiles.map((file, index) =>
+                            React.createElement('span', { key: file.name + index, className: 'agent-file' }, [
+                                file.name || 'pasted image',
+                                React.createElement('button', { key: 'x', type: 'button', onClick: () => removeAgentFile(index), 'aria-label': 'Remove reference image' }, 'x')
+                            ])
+                        )) : null
                     ]),
                     agentError ? React.createElement('div', { key: 'err', className: 'agent-error' }, agentError) : null,
                     React.createElement('div', { key: 'jobs', className: 'agent-jobs' }, agentJobs.map(job =>

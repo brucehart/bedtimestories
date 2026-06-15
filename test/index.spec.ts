@@ -4,6 +4,7 @@ import worker, { signSession, verifySession, SESSION_MAXAGE } from '../src/index
 import { getAccountRole } from '../src/auth';
 import { signState } from '../src/session';
 import { sha256Hex } from '../src/security';
+import { STORY_AGENT_RUNNER } from '../src/storyAgentRunner';
 
 interface Story {
     id: number;
@@ -874,5 +875,12 @@ describe('Story page', () => {
                 } finally {
                         globalThis.fetch = originalFetch;
                 }
+        });
+
+        it('passes Sprite reference image paths into Codex and generate-story', () => {
+                expect(STORY_AGENT_RUNNER).toContain('Reference images are attached to this Codex request');
+                expect(STORY_AGENT_RUNNER).toContain('--ref-image');
+                expect(STORY_AGENT_RUNNER).toContain('cmd.extend(["--image", ref_path])');
+                expect(STORY_AGENT_RUNNER).toContain('output_dir / (str(ref.get("id", len(paths) + 1)) + "-" + safe_name)');
         });
 });

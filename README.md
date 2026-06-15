@@ -87,6 +87,8 @@ The Google OAuth client credentials should be stored as secrets named
 ### Agentic Story Generation
 
 The `/manage` page can launch story-generation jobs in a preconfigured Sprite.
+Story ideas may include optional reference images selected from a file picker or
+pasted into the prompt field.
 Apply `db/story_agent_tables.sql`, keep the `bedtime-stories` Sprite updated
 with the project and `generate-story` skill, and configure these Worker secrets:
 
@@ -104,6 +106,9 @@ The runner creates a Sprite task hold while Codex is actively generating a story
 refreshes it during the run, and releases it when the job completes or fails.
 Canceling a job also asks the Sprite to terminate the runner and delete that
 task hold, making the Sprite eligible to pause when idle.
+When reference images are included, the Worker stores them in R2, the runner
+downloads them into `/tmp` on the Sprite, attaches them to Codex, and instructs
+Codex to pass each path to `generate-story` as `--ref-image`.
 
 ### Security Notes
 

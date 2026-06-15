@@ -137,7 +137,7 @@ def download_refs(refs):
     for ref in refs:
         filename = ref.get("filename") or ("reference-" + str(ref.get("id", len(paths) + 1)) + ".jpg")
         safe_name = pathlib.Path(filename).name or ("reference-" + str(len(paths) + 1) + ".jpg")
-        output_path = output_dir / safe_name
+        output_path = output_dir / (str(ref.get("id", len(paths) + 1)) + "-" + safe_name)
         req = urllib.request.Request(
             BASE_URL + ref["url"],
             method="GET",
@@ -154,6 +154,16 @@ def build_codex_prompt(job, ref_paths):
     if job.get("target_date"):
         date_line = "Use this target story date: " + job["target_date"] + "."
     refs = "\n".join("- " + path for path in ref_paths) if ref_paths else "- none"
+    reference_instruction = (
+        "No reference images were provided."
+        if not ref_paths
+        else (
+            "Reference images are attached to this Codex request and also stored at the /tmp paths above. "
+            "Inspect them and use visible details as inspiration for the story. "
+            "When running the generate-story workflow, include every listed path as a separate --ref-image argument "
+            "so the media generation provider receives the same references."
+        )
+    )
     return (
         "Use the generate-story skill to create and publish a bedtime story for James.\n\n"
         "Story idea:\n"
@@ -162,6 +172,8 @@ def build_codex_prompt(job, ref_paths):
         + date_line
         + "\n\nReference image paths:\n"
         + refs
+        + "\n\n"
+        + reference_instruction
         + "\n\nRun the full workflow, including media generation and publishing through the existing story API. "
         "Stream useful progress as you work. When complete, print exactly one final line in this format:\n"
         "STORY_AGENT_RESULT_JSON={\"story_id\":123,\"title\":\"Title\",\"image_key\":\"image-key\",\"video_key\":\"video-key\"}\n"
@@ -230,8 +242,10 @@ def main():
             "--dangerously-bypass-approvals-and-sandbox",
             "--cd",
             WORKDIR,
-            prompt,
         ]
+        for ref_path in ref_paths:
+            cmd.extend(["--image", ref_path])
+        cmd.append(prompt)
         post_event("status", "Launching Codex story workflow.")
         proc = subprocess.Popen(
             cmd,
