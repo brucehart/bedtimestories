@@ -243,16 +243,18 @@ async function launchSpriteJob(env: Env, origin: string, jobId: string, callback
 
     const runnerPath = `/tmp/story-agent-${jobId}.py`;
     const envPath = `/tmp/story-agent-${jobId}.env`;
+    const logPath = `/tmp/story-agent-${jobId}.log`;
     const jobUrl = `${origin}/api/agent/jobs/${encodeURIComponent(jobId)}`;
     const taskName = spriteTaskName(jobId);
-    const runnerEnv = [
+    const runnerEnvLines = [
         `export STORY_AGENT_JOB_ID=${quoteShell(jobId)}`,
         `export STORY_AGENT_TOKEN=${quoteShell(callbackToken)}`,
         `export STORY_AGENT_BASE_URL=${quoteShell(origin)}`,
         `export STORY_AGENT_WORKDIR=${quoteShell(config.workdir)}`,
         `export STORY_AGENT_TASK_NAME=${quoteShell(taskName)}`,
         'export PYTHONUNBUFFERED=1'
-    ].join('\n');
+    ];
+    const writeEnvCommand = `umask 077; printf '%s\\n' ${runnerEnvLines.map(quoteShell).join(' ')} > "$envfile"`;
     const runScript = [
         `. ${quoteShell(envPath)}`,
         `rm -f ${quoteShell(envPath)}`,
@@ -261,11 +263,15 @@ async function launchSpriteJob(env: Env, origin: string, jobId: string, callback
     const shell = [
         `runner=${quoteShell(runnerPath)}`,
         `envfile=${quoteShell(envPath)}`,
-        `curl -fsS -H ${quoteShell(`Authorization: Bearer ${callbackToken}`)} ${quoteShell(`${jobUrl}/runner.py`)} -o "$runner"`,
+        `logfile=${quoteShell(logPath)}`,
+        ': > "$logfile"',
+        `printf '%s\\n' ${quoteShell('launcher: downloading runner')} >> "$logfile"`,
+        `curl -fsS -H ${quoteShell(`Authorization: Bearer ${callbackToken}`)} ${quoteShell(`${jobUrl}/runner.py`)} -o "$runner" >> "$logfile" 2>&1`,
         'chmod 700 "$runner"',
-        `cat > "$envfile" <<'STORY_AGENT_ENV'\n${runnerEnv}\nSTORY_AGENT_ENV`,
-        'chmod 600 "$envfile"',
-        `nohup bash -lc ${quoteShell(runScript)} >> ${quoteShell(`/tmp/story-agent-${jobId}.log`)} 2>&1 &`
+        writeEnvCommand,
+        `printf '%s\\n' ${quoteShell('launcher: starting runner')} >> "$logfile"`,
+        `nohup bash -lc ${quoteShell(runScript)} >> "$logfile" 2>&1 &`,
+        `printf '%s\\n' ${quoteShell('launcher: runner launch returned')} >> "$logfile"`
     ].join(' && ');
 
     const url = new URL(`${config.apiBase}/v1/sprites/${encodeURIComponent(config.spriteName)}/exec`);

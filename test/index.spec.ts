@@ -742,6 +742,8 @@ describe('Story page', () => {
                         expect(launchUrl.pathname).toBe('/v1/sprites/bedtime-stories/exec');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('story-agent-');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('STORY_AGENT_TASK_NAME=');
+                        expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain("printf '%s\\n'");
+                        expect(launchUrl.searchParams.getAll('cmd').join(' ')).not.toContain('STORY_AGENT_ENV');
                         expect(agentState.events.some(event => event.message.includes('launch command accepted'))).toBe(true);
                 } finally {
                         globalThis.fetch = originalFetch;
