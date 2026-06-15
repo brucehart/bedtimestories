@@ -242,13 +242,30 @@ async function launchSpriteJob(env: Env, origin: string, jobId: string, callback
     await appendAgentEvent(env, jobId, 'status', `Starting Sprite ${config.spriteName}.`);
 
     const runnerPath = `/tmp/story-agent-${jobId}.py`;
+    const envPath = `/tmp/story-agent-${jobId}.env`;
     const jobUrl = `${origin}/api/agent/jobs/${encodeURIComponent(jobId)}`;
     const taskName = spriteTaskName(jobId);
+    const runnerEnv = [
+        `export STORY_AGENT_JOB_ID=${quoteShell(jobId)}`,
+        `export STORY_AGENT_TOKEN=${quoteShell(callbackToken)}`,
+        `export STORY_AGENT_BASE_URL=${quoteShell(origin)}`,
+        `export STORY_AGENT_WORKDIR=${quoteShell(config.workdir)}`,
+        `export STORY_AGENT_TASK_NAME=${quoteShell(taskName)}`,
+        'export PYTHONUNBUFFERED=1'
+    ].join('\n');
+    const runScript = [
+        `. ${quoteShell(envPath)}`,
+        `rm -f ${quoteShell(envPath)}`,
+        `exec /home/sprite/scripts/.venv/bin/python ${quoteShell(runnerPath)}`
+    ].join(' && ');
     const shell = [
         `runner=${quoteShell(runnerPath)}`,
+        `envfile=${quoteShell(envPath)}`,
         `curl -fsS -H ${quoteShell(`Authorization: Bearer ${callbackToken}`)} ${quoteShell(`${jobUrl}/runner.py`)} -o "$runner"`,
         'chmod 700 "$runner"',
-        `nohup env STORY_AGENT_JOB_ID=${quoteShell(jobId)} STORY_AGENT_TOKEN=${quoteShell(callbackToken)} STORY_AGENT_BASE_URL=${quoteShell(origin)} STORY_AGENT_WORKDIR=${quoteShell(config.workdir)} STORY_AGENT_TASK_NAME=${quoteShell(taskName)} PYTHONUNBUFFERED=1 /home/sprite/scripts/.venv/bin/python "$runner" >> ${quoteShell(`/tmp/story-agent-${jobId}.log`)} 2>&1 &`
+        `cat > "$envfile" <<'STORY_AGENT_ENV'\n${runnerEnv}\nSTORY_AGENT_ENV`,
+        'chmod 600 "$envfile"',
+        `nohup bash -lc ${quoteShell(runScript)} >> ${quoteShell(`/tmp/story-agent-${jobId}.log`)} 2>&1 &`
     ].join(' && ');
 
     const url = new URL(`${config.apiBase}/v1/sprites/${encodeURIComponent(config.spriteName)}/exec`);
