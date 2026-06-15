@@ -163,6 +163,7 @@
                     const suffix = lastId ? '?after=' + lastId : '';
                     source = new EventSource('/agent/jobs/' + encodeURIComponent(activeJob.id) + '/events' + suffix);
                     const onEvent = event => {
+                        if (typeof event.data !== 'string') return;
                         lastId = Math.max(lastId, Number(event.lastEventId || 0));
                         let data = {};
                         try { data = JSON.parse(event.data); } catch { data = { message: event.data }; }
@@ -172,11 +173,16 @@
                             loadAgentJobs();
                         }
                     };
-                    ['status','log','feedback','warning','error','complete','failed','canceled','running','starting'].forEach(type => source.addEventListener(type, onEvent));
-                    source.onerror = () => {
+                    const onConnectionError = event => {
+                        if (typeof event.data === 'string') {
+                            onEvent(event);
+                            return;
+                        }
                         if (source) source.close();
                         if (!closed) setTimeout(connect, 2500);
                     };
+                    ['status','log','feedback','warning','complete','failed','canceled','running','starting'].forEach(type => source.addEventListener(type, onEvent));
+                    source.addEventListener('error', onConnectionError);
                 };
                 connect();
                 return () => {

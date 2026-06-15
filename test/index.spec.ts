@@ -741,6 +741,7 @@ describe('Story page', () => {
                         const launchUrl = new URL(spriteRequests[0]);
                         expect(launchUrl.pathname).toBe('/v1/sprites/bedtime-stories/exec');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('story-agent-');
+                        expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('STORY_AGENT_TASK_NAME=');
                         expect(agentState.events.some(event => event.message.includes('launch command accepted'))).toBe(true);
                 } finally {
                         globalThis.fetch = originalFetch;
@@ -840,7 +841,7 @@ describe('Story page', () => {
                 }) as any;
 
                 try {
-                        const jobId = 'job_abcdef1234567890';
+                        const jobId = 'job_ABCdef1234567890';
                         const agentState = createAgentState();
                         agentState.jobs.push({
                                 id: jobId,
@@ -872,6 +873,7 @@ describe('Story page', () => {
                         expect(agentState.jobs[0].status).toBe('canceled');
                         expect(spriteRequests).toHaveLength(1);
                         expect(new URL(spriteRequests[0]).searchParams.getAll('cmd').join(' ')).toContain(jobId);
+                        expect(new URL(spriteRequests[0]).searchParams.getAll('cmd').join(' ')).toContain('http://sprite/v1/tasks/story-agent-job-abcdef1234567890');
                 } finally {
                         globalThis.fetch = originalFetch;
                 }
@@ -921,5 +923,7 @@ describe('Story page', () => {
                 expect(STORY_AGENT_RUNNER).toContain('pty.openpty()');
                 expect(STORY_AGENT_RUNNER).toContain('os.write(');
                 expect(STORY_AGENT_RUNNER).not.toContain('stdin=subprocess.DEVNULL');
+                expect(STORY_AGENT_RUNNER).toContain('STORY_AGENT_TASK_NAME');
+                expect(STORY_AGENT_RUNNER).toContain('("story-agent-" + JOB_ID).lower()');
         });
 });

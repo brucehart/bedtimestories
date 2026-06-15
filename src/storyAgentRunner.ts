@@ -1,5 +1,6 @@
 export const STORY_AGENT_RUNNER = String.raw`#!/usr/bin/env python3
 import json
+import hashlib
 import os
 import pathlib
 import pty
@@ -20,9 +21,17 @@ JOB_ID = os.environ["STORY_AGENT_JOB_ID"]
 JOB_TOKEN = os.environ["STORY_AGENT_TOKEN"]
 WORKDIR = os.environ.get("STORY_AGENT_WORKDIR", "/home/sprite/bedtimestories/main")
 SECRETS_PATH = pathlib.Path.home() / ".config" / "secrets" / "codex.env"
-TASK_NAME = "story-agent-" + JOB_ID
+TASK_NAME = os.environ.get("STORY_AGENT_TASK_NAME") or re.sub(
+    r"[^a-z0-9-]+",
+    "-",
+    ("story-agent-" + JOB_ID).lower(),
+).strip("-")
 TASK_EXPIRE = "5m"
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
+
+
+def token_hash_prefix():
+    return hashlib.sha256(JOB_TOKEN.encode("utf-8")).hexdigest()[:12]
 
 
 def parse_env_value(raw):
@@ -118,6 +127,16 @@ def post_event(event_type, message, metadata=None):
             "/api/agent/jobs/" + urllib.parse.quote(JOB_ID) + "/events",
             {"type": event_type, "message": message, "metadata": metadata or {}},
             timeout=10,
+        )
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        print(
+            "failed to post event: HTTP Error "
+            + str(exc.code)
+            + ": "
+            + detail[:500],
+            file=sys.stderr,
+            flush=True,
         )
     except Exception as exc:
         print("failed to post event: " + str(exc), file=sys.stderr, flush=True)
@@ -224,6 +243,7 @@ def parse_result(output):
 
 def main():
     load_secret_env()
+    print("story agent runner started; callback token hash prefix " + token_hash_prefix(), flush=True)
     refresh_task()
     task_stop = threading.Event()
     task_thread = threading.Thread(target=heartbeat_task, args=(task_stop,), daemon=True)
@@ -346,6 +366,7 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
+        print("HTTP error " + str(exc.code) + ": " + detail[:500], file=sys.stderr, flush=True)
         post_event("error", "HTTP error " + str(exc.code) + ": " + detail[:500])
         try:
             patch_job("failed", error="HTTP error " + str(exc.code))
