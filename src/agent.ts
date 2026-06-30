@@ -5,6 +5,7 @@ import { STORY_AGENT_RUNNER } from './storyAgentRunner';
 const DEFAULT_SPRITES_API_BASE = 'https://api.sprites.dev';
 const DEFAULT_SPRITE_NAME = 'bedtime-stories';
 const DEFAULT_SPRITE_WORKDIR = '/home/sprite/bedtimestories/main';
+const DEFAULT_CODEX_HOME = '/home/sprite/.codex-bedtimestories';
 
 // Cloudflare's Browser Integrity Check blocks the default curl/urllib
 // User-Agent with Error 1010 (browser_signature_banned). The Sprite runner and
@@ -250,7 +251,8 @@ function spriteConfig(env: Env) {
         apiBase: (env.STORY_AGENT_SPRITES_API_BASE || DEFAULT_SPRITES_API_BASE).replace(/\/+$/, ''),
         token: env.SPRITES_API_TOKEN || env.SPRITE_API_TOKEN || '',
         spriteName: env.STORY_AGENT_SPRITE_NAME || DEFAULT_SPRITE_NAME,
-        workdir: env.STORY_AGENT_SPRITE_WORKDIR || DEFAULT_SPRITE_WORKDIR
+        workdir: env.STORY_AGENT_SPRITE_WORKDIR || DEFAULT_SPRITE_WORKDIR,
+        codexHome: env.STORY_AGENT_CODEX_HOME || DEFAULT_CODEX_HOME
     };
 }
 
@@ -306,6 +308,7 @@ async function launchSpriteJob(env: Env, origin: string, jobId: string, callback
         `export STORY_AGENT_BASE_URL=${quoteShell(origin)}`,
         `export STORY_AGENT_WORKDIR=${quoteShell(config.workdir)}`,
         `export STORY_AGENT_TASK_NAME=${quoteShell(taskName)}`,
+        `export CODEX_HOME=${quoteShell(config.codexHome)}`,
         'export PYTHONUNBUFFERED=1'
     ];
     const writeEnvCommand = `umask 077 && printf '%s\\n' ${runnerEnvLines.map(quoteShell).join(' ')} > "$envfile"`;

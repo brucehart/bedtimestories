@@ -28,6 +28,7 @@ export interface Env {
     STORY_AGENT_SPRITES_API_BASE?: string;
     STORY_AGENT_SPRITE_NAME?: string;
     STORY_AGENT_SPRITE_WORKDIR?: string;
+    STORY_AGENT_CODEX_HOME?: string;
 }
 
 export interface AuthInfo {

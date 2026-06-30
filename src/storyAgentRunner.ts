@@ -20,6 +20,7 @@ BASE_URL = os.environ["STORY_AGENT_BASE_URL"].rstrip("/")
 JOB_ID = os.environ["STORY_AGENT_JOB_ID"]
 JOB_TOKEN = os.environ["STORY_AGENT_TOKEN"]
 WORKDIR = os.environ.get("STORY_AGENT_WORKDIR", "/home/sprite/bedtimestories/main")
+DEFAULT_CODEX_HOME = "/home/sprite/.codex-bedtimestories"
 SECRETS_PATH = pathlib.Path.home() / ".config" / "secrets" / "codex.env"
 TASK_NAME = os.environ.get("STORY_AGENT_TASK_NAME") or re.sub(
     r"[^a-z0-9-]+",
@@ -64,6 +65,28 @@ def load_secret_env():
             os.environ[name] = parse_env_value(raw_value.strip())
     if os.environ.get("OPENAI_BEDTIME_STORY_KEY") and not os.environ.get("OPENAI_API_KEY"):
         os.environ["OPENAI_API_KEY"] = os.environ["OPENAI_BEDTIME_STORY_KEY"]
+
+
+def prepare_codex_home():
+    codex_home = str(pathlib.Path(os.environ.get("CODEX_HOME") or DEFAULT_CODEX_HOME).expanduser())
+    codex_home_path = pathlib.Path(codex_home)
+    codex_home_path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        codex_home_path.chmod(0o700)
+    except OSError as exc:
+        post_event("warning", "Could not set CODEX_HOME permissions: " + str(exc))
+    os.environ["CODEX_HOME"] = codex_home
+    auth_path = codex_home_path / "auth.json"
+    if not auth_path.exists():
+        post_event(
+            "warning",
+            "Codex auth is missing at "
+            + str(auth_path)
+            + ". Run CODEX_HOME="
+            + codex_home
+            + " codex login --device-auth inside the bedtime-stories Sprite.",
+        )
+    return codex_home
 
 
 def api_request(method, path, payload=None, timeout=30):
@@ -281,6 +304,7 @@ def main():
     task_thread.start()
     post_event("status", "Sprite task hold acquired.")
     try:
+        codex_home = prepare_codex_home()
         job = bootstrap()
         patch_job("running")
         post_event("status", "Story agent started in Sprite.")
@@ -291,6 +315,7 @@ def main():
         prompt = build_codex_prompt(job, ref_paths)
         env = os.environ.copy()
         env["STORY_API_BASE_URL"] = env.get("STORY_API_BASE_URL") or BASE_URL
+        env["CODEX_HOME"] = codex_home
         result_path = pathlib.Path("/tmp") / ("story-agent-" + JOB_ID + "-codex-result.txt")
         try:
             result_path.unlink()

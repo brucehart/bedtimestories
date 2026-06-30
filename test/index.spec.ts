@@ -432,6 +432,7 @@ describe('Story page', () => {
                 delete (env as any).STORY_AGENT_SPRITES_API_BASE;
                 delete (env as any).STORY_AGENT_SPRITE_NAME;
                 delete (env as any).STORY_AGENT_SPRITE_WORKDIR;
+                delete (env as any).STORY_AGENT_CODEX_HOME;
         });
 
         it('signs and verifies JWTs', async () => {
@@ -774,11 +775,52 @@ describe('Story page', () => {
                         expect(launchUrl.pathname).toBe('/v1/sprites/bedtime-stories/exec');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('story-agent-');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('STORY_AGENT_TASK_NAME=');
+                        expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('CODEX_HOME=');
+                        expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('/home/sprite/.codex-bedtimestories');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain("printf '%s\\n'");
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('Mozilla/5.0');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).not.toContain('STORY_AGENT_ENV');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).not.toContain('& &&');
                         expect(agentState.events.some(event => event.message.includes('launch command accepted'))).toBe(true);
+                } finally {
+                        globalThis.fetch = originalFetch;
+                }
+        });
+
+        it('passes a configured Codex home to the Sprite launcher', async () => {
+                const originalFetch = globalThis.fetch;
+                const spriteRequests: string[] = [];
+                globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+                        if (url.startsWith('https://api.sprites.dev/')) {
+                                spriteRequests.push(url);
+                                return Response.json({ ok: true });
+                        }
+                        return originalFetch(input as any, init);
+                }) as any;
+
+                try {
+                        const agentState = createAgentState();
+                        env.DB = createDb(['test@example.com'], [], agentState);
+                        env.IMAGES = createAgentImages().bucket;
+                        env.STORY_AGENT_ALLOWED_EMAILS = 'test@example.com';
+                        env.SPRITES_API_TOKEN = 'sprites-token';
+                        env.STORY_AGENT_CODEX_HOME = '/home/sprite/.codex-bedtimestories-custom';
+                        const jwt = await signSession('test@example.com', env);
+                        const data = new FormData();
+                        data.set('prompt', 'A quiet cloud library');
+
+                        const response = await workerFetch(new Request('https://example.com/agent/jobs', {
+                                method: 'POST',
+                                body: data,
+                                headers: { cookie: `session=${jwt}` }
+                        }));
+
+                        expect(response.status).toBe(202);
+                        expect(spriteRequests).toHaveLength(1);
+                        const launchCommand = new URL(spriteRequests[0]).searchParams.getAll('cmd').join(' ');
+                        expect(launchCommand).toContain('CODEX_HOME=');
+                        expect(launchCommand).toContain('/home/sprite/.codex-bedtimestories-custom');
                 } finally {
                         globalThis.fetch = originalFetch;
                 }
@@ -1015,6 +1057,11 @@ describe('Story page', () => {
                 expect(STORY_AGENT_RUNNER).not.toContain('"--no-alt-screen"');
                 expect(STORY_AGENT_RUNNER).toContain('STORY_AGENT_TASK_NAME');
                 expect(STORY_AGENT_RUNNER).toContain('("story-agent-" + JOB_ID).lower()');
+                expect(STORY_AGENT_RUNNER).toContain('DEFAULT_CODEX_HOME = "/home/sprite/.codex-bedtimestories"');
+                expect(STORY_AGENT_RUNNER).toContain('codex_home_path.mkdir(mode=0o700, parents=True, exist_ok=True)');
+                expect(STORY_AGENT_RUNNER).toContain('auth_path = codex_home_path / "auth.json"');
+                expect(STORY_AGENT_RUNNER).toContain('env["CODEX_HOME"] = codex_home');
+                expect(STORY_AGENT_RUNNER).not.toContain('.codex/auth.json');
                 expect(STORY_AGENT_RUNNER).toContain('"User-Agent": USER_AGENT');
                 expect(STORY_AGENT_RUNNER).toContain('headers={"Authorization": "Bearer " + JOB_TOKEN, "User-Agent": USER_AGENT}');
         });

@@ -86,6 +86,12 @@ This modular structure enables clear navigation and division of responsibilities
   - `POST /api/media` accepts `multipart/form-data` with a `file` field and returns an R2 key.
   - `POST /api/stories` accepts JSON with `title`, `content` (Markdown), optional `date`, and optional `image_url` / `video_url` R2 keys.
 - Authentication uses `X-Story-Token`, validated against `STORY_API_TOKEN` in worker secrets.
+- Sprite-launched Codex runs must use the project-specific Codex home
+  `/home/sprite/.codex-bedtimestories` unless `STORY_AGENT_CODEX_HOME` overrides
+  it. Create fresh Sprite auth with
+  `mkdir -p /home/sprite/.codex-bedtimestories` and
+  `CODEX_HOME=/home/sprite/.codex-bedtimestories codex login --device-auth`;
+  do not copy `auth.json` from another Sprite or project.
 
 ## Coding Conventions for OpenAI Codex
 

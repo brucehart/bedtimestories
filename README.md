@@ -126,7 +126,18 @@ Optional vars:
 - `STORY_AGENT_SPRITE_NAME` – defaults to `bedtime-stories`.
 - `STORY_AGENT_SPRITE_WORKDIR` – defaults to `/home/sprite/bedtimestories/main`.
 - `STORY_AGENT_SPRITES_API_BASE` – defaults to `https://api.sprites.dev`.
+- `STORY_AGENT_CODEX_HOME` – defaults to `/home/sprite/.codex-bedtimestories`.
 - `STORY_API_USER_AGENT` – browser-like user agent used by Sprite-side story API calls; override only if Cloudflare Browser Integrity Check starts blocking the default.
+
+Codex auth inside the Sprite is project-specific. Before first use, create fresh
+bedtimestories auth inside the `bedtime-stories` Sprite:
+
+```bash
+mkdir -p /home/sprite/.codex-bedtimestories
+CODEX_HOME=/home/sprite/.codex-bedtimestories codex login --device-auth
+```
+
+Do not reuse or copy `auth.json` from another Sprite or project.
 
 The runner creates a Sprite task hold while Codex is actively generating a story,
 refreshes it during the run, and releases it when the job completes or fails.
