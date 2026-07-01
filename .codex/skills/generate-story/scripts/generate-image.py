@@ -20,8 +20,7 @@ from story_media_common import (
 REPLICATE_API_BASE = "https://api.replicate.com/v1"
 OPENAI_API_BASE = "https://api.openai.com/v1"
 DEFAULT_PROVIDER = "replicate"
-NANO_BANANA_2_LITE_MODEL = "google/nano-banana-2-lite"
-DEFAULT_MODEL = NANO_BANANA_2_LITE_MODEL
+DEFAULT_MODEL = "google/nano-banana-2"
 FALLBACK_MODEL = "black-forest-labs/flux-1.1-pro"
 OPENAI_MODEL = "gpt-image-2"
 OPENAI_SIZE = "1280x720"
@@ -113,25 +112,21 @@ def run_prediction(token: str, model: str, payload: dict) -> tuple[str, str]:
     return local_path, output_url
 
 
-def build_replicate_payload(prompt: str, image_input: list[str], model: str) -> dict:
-    inputs: dict[str, object] = {
-        "prompt": prompt,
-        "image_input": image_input,
-        "aspect_ratio": "16:9",
-        "output_format": "jpg",
-    }
-    if model != NANO_BANANA_2_LITE_MODEL:
-        inputs["resolution"] = "1K"
-        inputs["safety_filter_level"] = "block_only_high"
-    return {"input": inputs}
-
-
 def generate_with_replicate(prompt: str, image_paths: list[str], model: str) -> tuple[str, str, str]:
     token = require_env("REPLICATE_API_TOKEN")
 
     image_input = [to_data_uri(path) for path in image_paths]
 
-    primary_payload = build_replicate_payload(prompt, image_input, model)
+    primary_payload = {
+        "input": {
+            "prompt": prompt,
+            "image_input": image_input,
+            "aspect_ratio": "16:9",
+            "resolution": "1K",
+            "output_format": "jpg",
+            "safety_filter_level": "block_only_high",
+        }
+    }
 
     try:
         local_path, remote_url = run_prediction(token, model, primary_payload)

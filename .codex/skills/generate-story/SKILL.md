@@ -183,7 +183,7 @@ Default runner mode:
 - `replicate` uses Replicate for both image and video.
 
 Bundled Replicate defaults:
-- Image: `google/nano-banana-2-lite`, landscape `16:9`, 1K output
+- Image: `google/nano-banana-2`, landscape `16:9`, `resolution=1K`
 - Video: `wan-video/wan-2.2-i2v-fast`, `81` frames, `16` fps, `go_fast=true`, `resolution=480p`
 - To use the older PixVerse path, pass `--video-model pixverse/pixverse-v5`.
 
