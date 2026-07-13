@@ -24,6 +24,7 @@ const MAX_SPRITE_ERROR_SNIPPET_BYTES = 500;
 const MAX_AGENT_FORM_BYTES = MAX_AGENT_REF_IMAGES * MAX_AGENT_REF_IMAGE_BYTES + 1024 * 1024;
 const MAX_AGENT_JSON_BYTES = 16 * 1024;
 const MAX_AGENT_EVENTS = 2000;
+const MAX_AGENT_TERMINAL_EVENT_RESERVE = 50;
 const MAX_AGENT_MESSAGES = 100;
 const MAX_ACTIVE_JOBS_PER_USER = 1;
 const MAX_JOBS_PER_USER_PER_HOUR = 5;
@@ -332,12 +333,15 @@ async function appendAgentEvent(
     const safeEventType = sanitizeEventType(eventType);
     const safeMessage = message.slice(0, MAX_AGENT_EVENT_MESSAGE_LENGTH);
     const metadataJson = metadata === undefined ? null : JSON.stringify(metadata).slice(0, 12000);
+    const eventLimit = TERMINAL_STATUS.has(safeEventType)
+        ? MAX_AGENT_EVENTS
+        : MAX_AGENT_EVENTS - MAX_AGENT_TERMINAL_EVENT_RESERVE;
     await env.DB.prepare(
         'INSERT INTO story_agent_events (job_id, event_type, message, metadata, created) ' +
         'SELECT ?1, ?2, ?3, ?4, datetime(\'now\') WHERE ' +
         '(SELECT COUNT(*) FROM story_agent_events WHERE job_id = ?1) < ?5'
     )
-        .bind(jobId, safeEventType, safeMessage, metadataJson, MAX_AGENT_EVENTS)
+        .bind(jobId, safeEventType, safeMessage, metadataJson, eventLimit)
         .run();
 }
 

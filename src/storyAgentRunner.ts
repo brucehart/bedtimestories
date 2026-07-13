@@ -31,7 +31,7 @@ TASK_NAME = os.environ.get("STORY_AGENT_TASK_NAME") or re.sub(
 TASK_EXPIRE = "5m"
 MAX_RUNTIME_SECONDS = 50 * 60
 MAX_CAPTURE_CHARS = 2 * 1024 * 1024
-MAX_LOG_EVENTS = 2000
+MAX_LOG_EVENTS = 1900
 MAX_LINE_BUFFER_CHARS = 16 * 1024
 # Cloudflare's Browser Integrity Check rejects the default "Python-urllib/x.y"
 # User-Agent with Error 1010 (browser_signature_banned), which silently blocks
