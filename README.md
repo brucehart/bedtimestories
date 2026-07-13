@@ -17,7 +17,7 @@ Stories may be scheduled by specifying a future date when submitting. Scheduled 
 
 ## Requirements
 
-- [Node.js](https://nodejs.org/) 20+
+- [Node.js](https://nodejs.org/) 22+
 - [Wrangler](https://developers.cloudflare.com/workers/wrangler/) CLI
 
 ## Installation

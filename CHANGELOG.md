@@ -7,7 +7,7 @@ All notable changes to this project are documented here. Release notes with more
 - Automation: add `X-Story-Token` protected media upload, story create/update, and calendar lookup endpoints for the bundled `generate-story` skill and Sprite runner.
 - Media/workflow: support story video updates through automation, default generation to nano-banana-2 plus WAN video, and keep OpenAI media modes available as optional fallbacks.
 - Security/reliability: harden bearer token comparison, callback tokens, upload validation, media key validation, HTML security headers, cache refresh authentication, and Sprite runner user-agent handling.
-- Operations: add story-agent D1 schema, local Codex generation skill/scripts, Wrangler 4.58.0 lockfile update, and Node 20 requirement.
+- Operations: add story-agent D1 schema, local Codex generation skill/scripts, Wrangler 4.106.0 lockfile update, and Node 22 requirement.
 
 See full notes: release-notes/v1.1.0.md
 

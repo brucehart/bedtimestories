@@ -601,8 +601,9 @@ describe('Story page', () => {
 
         it('allows image access without login when PUBLIC_VIEW is true', async () => {
                 env.PUBLIC_VIEW = 'true';
-                env.IMAGES = createImages({ 'foo.txt': 'world' });
-                const response = await workerFetch('https://example.com/images/foo.txt');
+                const key = `public-${Date.now()}`;
+                env.IMAGES = createImages({ [key]: 'world' });
+                const response = await workerFetch(`https://example.com/images/${key}`);
                 expect(await response.text()).toBe('world');
                 expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable');
         });
