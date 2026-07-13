@@ -61,6 +61,8 @@ export async function requireAuth(request: Request, env: Env): Promise<Response 
         (
             url.pathname === '/' ||
             url.pathname === '/index.html' ||
+            url.pathname === '/manifest.webmanifest' ||
+            url.pathname === '/bedtime-stories-icon.png' ||
             url.pathname === '/stories' ||
             /^\/stories\/\d+(?:\/(next|prev))?$/.test(url.pathname) ||
             /^\/(?:assets|vendor)\/[A-Za-z0-9._-]+\.js$/.test(url.pathname) ||

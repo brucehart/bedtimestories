@@ -709,6 +709,18 @@ describe('Story page', () => {
                 expect(body).toContain('<div id="root"></div>');
         });
 
+        it('serves page metadata assets without login when PUBLIC_VIEW is true', async () => {
+                env.PUBLIC_VIEW = 'true';
+
+                const manifest = await workerFetch('https://example.com/manifest.webmanifest');
+                expect(manifest.status).toBe(200);
+                expect(await manifest.json<any>()).toMatchObject({ name: 'Bedtime Stories' });
+
+                const icon = await workerFetch('https://example.com/bedtime-stories-icon.png');
+                expect(icon.status).toBe(200);
+                expect(icon.headers.get('Content-Type')).toBe('image/png');
+        });
+
         it('requires login for manage page even when PUBLIC_VIEW is true', async () => {
                 env.PUBLIC_VIEW = 'true';
                 const response = await workerFetch(new Request('https://example.com/manage', { redirect: 'manual' }));
