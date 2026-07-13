@@ -19,7 +19,7 @@ DEFAULT_STORY_API_USER_AGENT = (
 )
 DEFAULT_HTTP_TIMEOUT_SECONDS = 60
 MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
-MAX_JSON_RESPONSE_BYTES = 1024 * 1024
+MAX_JSON_RESPONSE_BYTES = 16 * 1024 * 1024
 
 
 def parse_env_value(raw: str) -> str:
@@ -102,7 +102,8 @@ def request_json(
         with urllib.request.urlopen(req, timeout=DEFAULT_HTTP_TIMEOUT_SECONDS) as resp:
             body_bytes = resp.read(MAX_JSON_RESPONSE_BYTES + 1)
             if len(body_bytes) > MAX_JSON_RESPONSE_BYTES:
-                raise RuntimeError("API JSON response exceeded the 1 MB limit.")
+                limit_mb = MAX_JSON_RESPONSE_BYTES // (1024 * 1024)
+                raise RuntimeError(f"API JSON response exceeded the {limit_mb} MB limit.")
             body = body_bytes.decode("utf-8")
             return json.loads(body)
     except urllib.error.HTTPError as exc:

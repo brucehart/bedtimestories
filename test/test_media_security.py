@@ -27,6 +27,7 @@ class FakeResponse:
     def __init__(self, *, body: bytes = b"{}", headers=None):
         self.body = body
         self.headers = headers or {}
+        self.offset = 0
 
     def __enter__(self):
         return self
@@ -35,7 +36,13 @@ class FakeResponse:
         return False
 
     def read(self, size=-1):
-        return self.body if size < 0 else self.body[:size]
+        if size < 0:
+            chunk = self.body[self.offset :]
+            self.offset = len(self.body)
+            return chunk
+        chunk = self.body[self.offset : self.offset + size]
+        self.offset += len(chunk)
+        return chunk
 
 
 class MediaSecurityTests(unittest.TestCase):
@@ -76,8 +83,18 @@ class MediaSecurityTests(unittest.TestCase):
             "urlopen",
             return_value=FakeResponse(body=oversized),
         ):
-            with self.assertRaisesRegex(RuntimeError, "1 MB"):
+            with self.assertRaisesRegex(RuntimeError, "16 MB"):
                 story_media_common.request_json("GET", "https://provider.example/status")
+
+    def test_provider_json_response_allows_base64_image_payloads_over_one_mb(self):
+        body = b'{"data":"' + (b"a" * (2 * 1024 * 1024)) + b'"}'
+        with mock.patch.object(
+            story_media_common.urllib.request,
+            "urlopen",
+            return_value=FakeResponse(body=body),
+        ):
+            result = story_media_common.request_json("GET", "https://provider.example/image")
+        self.assertEqual(len(result["data"]), 2 * 1024 * 1024)
 
     def test_provider_download_content_length_is_bounded(self):
         headers = {"Content-Length": str(story_media_common.MAX_DOWNLOAD_BYTES + 1)}
@@ -85,6 +102,23 @@ class MediaSecurityTests(unittest.TestCase):
             story_media_common.urllib.request,
             "urlopen",
             return_value=FakeResponse(headers=headers),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "100 MB"):
+                story_media_common.download_file(
+                    "https://provider.example/output.mp4",
+                    "story-video",
+                    ".mp4",
+                )
+
+    def test_provider_chunked_download_is_bounded(self):
+        oversized = b"x" * (2 * 1024 * 1024 + 1)
+        with (
+            mock.patch.object(story_media_common, "MAX_DOWNLOAD_BYTES", 2 * 1024 * 1024),
+            mock.patch.object(
+                story_media_common.urllib.request,
+                "urlopen",
+                return_value=FakeResponse(body=oversized),
+            ),
         ):
             with self.assertRaisesRegex(RuntimeError, "100 MB"):
                 story_media_common.download_file(

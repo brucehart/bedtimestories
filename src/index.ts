@@ -2,7 +2,6 @@
 import { Env } from './types';
 import { fetchHandler } from './routes';
 import { maintainAgentJobs } from './agent';
-export { signSession, verifySession, SESSION_MAXAGE } from './session';
 
 const UPDATE_CACHE_BASE = 'https://bedtimestories.bruce-hart.workers.dev';
 
