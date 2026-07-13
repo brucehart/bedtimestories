@@ -1,6 +1,6 @@
 import { Env } from './types';
 
-const SESSION_DAYS = 180;
+const SESSION_DAYS = 7;
 export const SESSION_MAXAGE = 60 * 60 * 24 * SESSION_DAYS;
 
 let ENC_KEY_PROMISE: Promise<CryptoKey> | null = null;

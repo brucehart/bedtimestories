@@ -1,6 +1,6 @@
 CREATE TABLE allowed_accounts (
   email TEXT PRIMARY KEY,
-  role  TEXT NOT NULL DEFAULT 'editor'
+  role  TEXT NOT NULL DEFAULT 'editor' CHECK (role IN ('reader', 'editor'))
 );
 
 CREATE INDEX idx_allowed_accounts ON allowed_accounts (email);

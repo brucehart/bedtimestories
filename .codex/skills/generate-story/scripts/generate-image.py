@@ -28,6 +28,7 @@ OPENAI_QUALITY = "low"
 OPENAI_OUTPUT_FORMAT = "jpeg"
 OPENAI_OUTPUT_COMPRESSION = 80
 DEFAULT_POLL_SECONDS = 3
+DEFAULT_POLL_TIMEOUT_SECONDS = 10 * 60
 
 
 def log(msg: str) -> None:
@@ -46,7 +47,18 @@ def read_poll_seconds() -> int:
     if value < 1:
         log(f"STORY_IMAGE_POLL_SECONDS must be >= 1 (using {DEFAULT_POLL_SECONDS})")
         return DEFAULT_POLL_SECONDS
-    return value
+    return min(value, 60)
+
+
+def read_poll_timeout_seconds() -> int:
+    raw = os.environ.get("STORY_IMAGE_POLL_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_POLL_TIMEOUT_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_POLL_TIMEOUT_SECONDS
+    return min(max(value, 60), 30 * 60)
 
 
 def to_data_uri(path: str) -> str:
@@ -72,8 +84,11 @@ def replicate_request(token: str, method: str, url: str, payload: dict | None = 
 
 def wait_for_prediction(token: str, prediction_id: str) -> dict:
     poll_seconds = read_poll_seconds()
+    deadline = time.monotonic() + read_poll_timeout_seconds()
     url = f"{REPLICATE_API_BASE}/predictions/{prediction_id}"
     while True:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Image generation timed out while waiting for the provider.")
         pred = replicate_request(token, "GET", url)
         status = pred.get("status")
         if status == "succeeded":

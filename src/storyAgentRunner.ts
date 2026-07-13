@@ -6,6 +6,7 @@ import pathlib
 import pty
 import re
 import select
+import signal
 import shlex
 import subprocess
 import sys
@@ -28,6 +29,10 @@ TASK_NAME = os.environ.get("STORY_AGENT_TASK_NAME") or re.sub(
     ("story-agent-" + JOB_ID).lower(),
 ).strip("-")
 TASK_EXPIRE = "5m"
+MAX_RUNTIME_SECONDS = 50 * 60
+MAX_CAPTURE_CHARS = 2 * 1024 * 1024
+MAX_LOG_EVENTS = 1900
+MAX_LINE_BUFFER_CHARS = 16 * 1024
 # Cloudflare's Browser Integrity Check rejects the default "Python-urllib/x.y"
 # User-Agent with Error 1010 (browser_signature_banned), which silently blocks
 # every callback to the Worker. Present a normal browser User-Agent instead.
@@ -258,6 +263,22 @@ def poll_messages(proc, input_fd):
         time.sleep(5)
 
 
+def terminate_process_group(proc):
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 def parse_result(output):
     output = strip_terminal(output)
     marker = "STORY_AGENT_RESULT_JSON="
@@ -343,6 +364,7 @@ def main():
             stdout=slave_fd,
             stderr=slave_fd,
             close_fds=True,
+            start_new_session=True,
         )
         os.close(slave_fd)
         post_event("status", "Codex exec process started with pid " + str(proc.pid) + ".")
@@ -352,9 +374,18 @@ def main():
         output_parts = []
         line_buffer = ""
         result = None
+        started_at = time.monotonic()
+        timed_out = False
+        captured_chars = 0
+        logged_events = 0
+        log_limit_reported = False
         last_output_at = time.time()
         last_idle_event_at = last_output_at
         while True:
+            if proc.poll() is None and time.monotonic() - started_at >= MAX_RUNTIME_SECONDS:
+                timed_out = True
+                post_event("error", "Story agent exceeded its 50-minute runtime limit.")
+                terminate_process_group(proc)
             timeout = 0 if proc.poll() is not None else 1
             ready, _, _ = select.select([master_fd], [], [], timeout)
             if not ready:
@@ -373,13 +404,20 @@ def main():
                 break
             text = chunk.decode("utf-8", errors="replace")
             last_output_at = time.time()
-            output_parts.append(text)
-            line_buffer += text
+            if captured_chars < MAX_CAPTURE_CHARS:
+                captured = text[: MAX_CAPTURE_CHARS - captured_chars]
+                output_parts.append(captured)
+                captured_chars += len(captured)
+            line_buffer = (line_buffer + text)[-MAX_LINE_BUFFER_CHARS:]
             while "\n" in line_buffer:
                 line, line_buffer = line_buffer.split("\n", 1)
                 clean = strip_terminal(line).rstrip()
-                if clean:
+                if clean and logged_events < MAX_LOG_EVENTS:
                     post_event("log", clean)
+                    logged_events += 1
+                elif clean and not log_limit_reported:
+                    post_event("warning", "Further Codex log lines were suppressed after the output quota was reached.")
+                    log_limit_reported = True
 
         if line_buffer:
             clean = strip_terminal(line_buffer).rstrip()
@@ -389,9 +427,17 @@ def main():
         exit_code = proc.wait()
         os.close(master_fd)
 
+        if timed_out:
+            patch_job("failed", error="Story agent exceeded its 50-minute runtime limit.")
+            return 124
+
         if result_path.exists():
             try:
-                final_message = result_path.read_text(encoding="utf-8")
+                with result_path.open("r", encoding="utf-8") as final_file:
+                    final_message = final_file.read(MAX_CAPTURE_CHARS + 1)
+                if len(final_message) > MAX_CAPTURE_CHARS:
+                    final_message = final_message[:MAX_CAPTURE_CHARS]
+                    post_event("warning", "Codex final output was truncated at the output quota.")
                 if final_message:
                     output_parts.append("\n" + final_message)
                     result = parse_result(final_message)
@@ -399,30 +445,29 @@ def main():
                 post_event("warning", "Could not read Codex final message: " + str(exc))
 
         if exit_code != 0:
-            patch_job("failed", error="Codex exited with status " + str(exit_code))
             post_event("error", "Codex exited with status " + str(exit_code))
+            patch_job("failed", error="Codex exited with status " + str(exit_code))
             return exit_code
 
         if not result:
             result = parse_result("".join(output_parts))
 
         if result and result.get("story_id"):
+            post_event("complete", "Story created.", result)
             patch_job(
                 "complete",
                 story_id=int(result["story_id"]),
                 title=str(result.get("title") or ""),
             )
-            post_event("complete", "Story created.", result)
             return 0
 
         if not result or not result.get("story_id"):
-            patch_job("failed", error="Codex completed without a story_id result marker.")
             post_event("error", "Codex completed without a story_id result marker.")
+            patch_job("failed", error="Codex completed without a story_id result marker.")
             return 2
     finally:
         task_stop.set()
         release_task()
-        post_event("status", "Sprite task hold released.")
 
 
 if __name__ == "__main__":

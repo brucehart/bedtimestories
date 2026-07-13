@@ -61,7 +61,7 @@ CREATE INDEX idx_stories_id ON stories(id);
 
 CREATE TABLE allowed_accounts (
   email TEXT PRIMARY KEY,
-  role  TEXT NOT NULL DEFAULT 'editor'
+  role  TEXT NOT NULL DEFAULT 'editor' CHECK (role IN ('reader', 'editor'))
 );
 ```
 
@@ -84,15 +84,33 @@ This uses the configuration defined in `wrangler.jsonc` which binds:
 
 Ensure these resources exist in your Cloudflare account before deploying.
 
+For an existing deployment created from the older schemas, apply the one-time
+security migration before deploying this version. It revokes legacy agent
+callback tokens, adds callback expiry, removes invalid account roles, and adds
+write-time role validation:
+
+```bash
+npx wrangler d1 execute bedtime-stories --remote --file db/security_hardening.sql
+```
+
 ### Authentication
 
 Access to the worker is protected using Google OAuth. Permitted accounts are
 listed in the `allowed_accounts` table of the D1 database along with a `role`
 value of either `reader` or `editor`. Readers can only view stories while
-editors may add, modify or delete them. Add or remove rows from this table to
-manage access. If the table is empty, any account is permitted as an editor.
-The Google OAuth client credentials should be stored as secrets named
-`GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+editors may add, modify or delete them. Authentication fails closed: an empty
+table, a missing account, or an unknown role grants no access. Seed the initial
+owner during deployment, substituting the actual email address:
+
+```bash
+npx wrangler d1 execute bedtime-stories --remote \
+  --command "INSERT INTO allowed_accounts (email, role) VALUES ('owner@example.com', 'editor')"
+```
+
+The Google OAuth client secret should be stored as `GOOGLE_CLIENT_SECRET`; the
+non-secret client ID is configured as `GOOGLE_CLIENT_ID`. Google ID tokens are
+verified locally against Google's signed JWKS and required claims. Application
+sessions expire after seven days.
 
 ### Story Automation API
 
@@ -152,10 +170,16 @@ browser-like user agent. If the account-level security rule still blocks the
 Sprite, disable Browser Integrity Check selectively for the authenticated
 automation API paths rather than disabling story-agent authentication.
 
+Agent admission is limited to one active job and five new jobs per account per
+hour. Each callback credential expires after one hour, runner execution stops
+after 50 minutes, provider polling and downloads are bounded, and terminal job
+records/reference images are deleted after seven days. Scheduled maintenance
+and authenticated job-list/create requests enforce expiry and retention.
+
 ### Security Notes
 
-- If `allowed_accounts` is empty, any Google account is treated as an `editor` (intentionally retained behavior; increases risk if the database is ever cleared).
-- The admin UI currently loads React from `unpkg.com` and uses inline scripts. This is a supply-chain risk (a compromised CDN response could perform authenticated actions). Recommended hardening is to self-host dependencies and move inline scripts into local JS files, then enforce a strict CSP.
+- `allowed_accounts` is fail-closed and accepts only the exact roles `reader` and `editor`.
+- React 18.3.1 and every page script are self-hosted. HTML responses enforce `default-src 'self'; script-src 'self'` and anti-framing directives.
 - `GET /update-cache` requires `CACHE_REFRESH_TOKEN` (Bearer auth). Do not deploy without setting it.
 - Story-generation jobs require both an editor session and `STORY_AGENT_ALLOWED_EMAILS`; leave the allowlist unset to disable this high-cost surface.
 

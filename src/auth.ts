@@ -1,22 +1,38 @@
 import { Env, AuthInfo } from './types';
 import { parseCookies } from './utils';
 import { signSession, verifySession, SESSION_MAXAGE } from './session';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+
+const GOOGLE_JWKS = createRemoteJWKSet(
+    new URL('https://www.googleapis.com/oauth2/v3/certs'),
+    {
+        cacheMaxAge: 10 * 60 * 1000,
+        cooldownDuration: 30 * 1000,
+        timeoutDuration: 5 * 1000
+    }
+);
+const GOOGLE_ISSUERS = ['https://accounts.google.com', 'accounts.google.com'];
+const MAX_EMAIL_LENGTH = 320;
 
 // Validate the ID token from Google OAuth and return the user email
 export async function verifyGoogleToken(token: string, env: Env): Promise<string | null> {
-    if (env.GOOGLE_CLIENT_ID === 'test' && token === 'test-token') {
-        return 'test@example.com';
+    if (!token || !env.GOOGLE_CLIENT_ID) return null;
+    try {
+        const { payload } = await jwtVerify(token, GOOGLE_JWKS, {
+            algorithms: ['RS256'],
+            audience: env.GOOGLE_CLIENT_ID,
+            issuer: GOOGLE_ISSUERS
+        });
+        const email = typeof payload.email === 'string' ? payload.email.trim() : '';
+        if (!payload.sub || payload.email_verified !== true) return null;
+        if (!email || email.length > MAX_EMAIL_LENGTH || !email.includes('@')) return null;
+        return email;
+    } catch {
+        return null;
     }
-    const resp = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${token}`);
-    if (!resp.ok) return null;
-    const data = await resp.json<any>();
-    if (data.aud !== env.GOOGLE_CLIENT_ID) return null;
-    if (Date.now() / 1000 > Number(data.exp)) return null;
-    return data.email as string;
 }
 
-// Retrieve the role for the given account or null if not allowed. If the
-// `allowed_accounts` table is empty any account is treated as an editor.
+// Retrieve only explicitly recognized roles for explicitly allowlisted accounts.
 export async function getAccountRole(
     email: string,
     env: Env
@@ -28,11 +44,9 @@ export async function getAccountRole(
             )
             .bind(email)
             .first<{ role: string }>();
-        if (row) return row.role === 'reader' ? 'reader' : 'editor';
-        const count = await env.DB
-            .prepare('SELECT COUNT(*) as count FROM allowed_accounts')
-            .first<{ count: number }>();
-        return count && count.count === 0 ? 'editor' : null;
+        if (!row) return null;
+        if (row.role === 'reader' || row.role === 'editor') return row.role;
+        return null;
     } catch {
         return null;
     }
@@ -47,8 +61,11 @@ export async function requireAuth(request: Request, env: Env): Promise<Response 
         (
             url.pathname === '/' ||
             url.pathname === '/index.html' ||
+            url.pathname === '/manifest.webmanifest' ||
+            url.pathname === '/bedtime-stories-icon.png' ||
             url.pathname === '/stories' ||
             /^\/stories\/\d+(?:\/(next|prev))?$/.test(url.pathname) ||
+            /^\/(?:assets|vendor)\/[A-Za-z0-9._-]+\.js$/.test(url.pathname) ||
             url.pathname.startsWith('/images/')
         );
 
