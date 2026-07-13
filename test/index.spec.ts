@@ -1,10 +1,12 @@
 import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeEach } from 'vitest';
 import worker, { signSession, verifySession, SESSION_MAXAGE } from '../src/index';
-import { getAccountRole } from '../src/auth';
+import { getAccountRole, verifyGoogleToken } from '../src/auth';
 import { signState } from '../src/session';
-import { sha256Hex } from '../src/security';
+import { sha256Hex, timingSafeEqualString } from '../src/security';
 import { STORY_AGENT_RUNNER } from '../src/storyAgentRunner';
+import { maintainAgentJobs } from '../src/agent';
+import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 
 interface Story {
     id: number;
@@ -31,6 +33,7 @@ interface AgentJob {
     title: string | null;
     error: string | null;
     callback_token_hash: string;
+    callback_token_expires: string | null;
     created: string | null;
     updated: string | null;
     started: string | null;
@@ -116,6 +119,11 @@ function updateAgentJobFromQuery(query: string, params: any[], job: AgentJob) {
             job.completed = job.completed || now;
         }
     }
+    if (query.includes("callback_token_hash = ''")) job.callback_token_hash = '';
+    if (query.includes("callback_token_expires = datetime('now')")) {
+        job.callback_token_expires = now;
+    }
+    if (query.includes('completed = COALESCE')) job.completed = job.completed || now;
 }
 
 function createDb(accounts: (string | Account)[], stories: Story[], agentState?: AgentState) {
@@ -147,6 +155,15 @@ function createDb(accounts: (string | Account)[], stories: Story[], agentState?:
                             }
                             if (agentState && query.includes('FROM story_agent_refs WHERE job_id = ?1 AND id = ?2')) {
                                 return (agentState.refs.find(ref => ref.job_id === params[0] && ref.id === params[1]) ?? null) as T;
+                            }
+                            if (agentState && query.startsWith('SELECT SUM(CASE WHEN status IN')) {
+                                const email = String(params[0]).toLowerCase();
+                                const oneHourAgo = Date.now() - 60 * 60 * 1000;
+                                const matching = agentState.jobs.filter(job => job.requested_by.toLowerCase() === email);
+                                return {
+                                    active: matching.filter(job => ['queued', 'starting', 'running'].includes(job.status)).length,
+                                    recent: matching.filter(job => Date.parse(job.created || '') >= oneHourAgo).length
+                                } as T;
                             }
                             return null as T;
                         },
@@ -191,10 +208,43 @@ function createDb(accounts: (string | Account)[], stories: Story[], agentState?:
                                         .map(({ id, author_email, content, created }) => ({ id, author_email, content, created })) as T[]
                                 };
                             }
+                            if (agentState && query.startsWith('SELECT id FROM story_agent_jobs WHERE status IN')) {
+                                const cutoff = params[0] as string;
+                                const activeQuery = query.includes("status IN ('queued', 'starting', 'running')");
+                                return {
+                                    results: agentState.jobs
+                                        .filter(job => activeQuery
+                                            ? ['queued', 'starting', 'running'].includes(job.status) &&
+                                                (!job.callback_token_expires || job.callback_token_expires <= cutoff)
+                                            : ['complete', 'failed', 'canceled'].includes(job.status) &&
+                                                (job.completed || job.updated || job.created || '') <= cutoff)
+                                        .slice(0, 25)
+                                        .map(job => ({ id: job.id })) as T[]
+                                };
+                            }
+                            if (agentState && query.startsWith('SELECT r2_key FROM story_agent_refs')) {
+                                return {
+                                    results: agentState.refs
+                                        .filter(ref => ref.job_id === params[0])
+                                        .map(ref => ({ r2_key: ref.r2_key })) as T[]
+                                };
+                            }
                             return { results: stories as T[] };
                         },
                         async run() {
                             if (agentState && query.startsWith('INSERT INTO story_agent_jobs')) {
+                                const active = agentState.jobs.filter(job =>
+                                    job.requested_by.toLowerCase() === String(params[1]).toLowerCase() &&
+                                    ['queued', 'starting', 'running'].includes(job.status)
+                                ).length;
+                                const oneHourAgo = Date.now() - 60 * 60 * 1000;
+                                const recent = agentState.jobs.filter(job =>
+                                    job.requested_by.toLowerCase() === String(params[1]).toLowerCase() &&
+                                    Date.parse(job.created || '') >= oneHourAgo
+                                ).length;
+                                if (active >= params[8] || recent >= params[9]) {
+                                    return { meta: { last_row_id: 0, changes: 0 } };
+                                }
                                 const now = new Date().toISOString();
                                 agentState.jobs.push({
                                     id: params[0],
@@ -204,6 +254,7 @@ function createDb(accounts: (string | Account)[], stories: Story[], agentState?:
                                     status: params[4],
                                     sprite_name: params[5],
                                     callback_token_hash: params[6],
+                                    callback_token_expires: params[7],
                                     sprite_session_id: null,
                                     story_id: null,
                                     title: null,
@@ -213,7 +264,7 @@ function createDb(accounts: (string | Account)[], stories: Story[], agentState?:
                                     started: null,
                                     completed: null
                                 });
-                                return { meta: { last_row_id: 1 } };
+                                return { meta: { last_row_id: 1, changes: 1 } };
                             }
                             if (agentState && query.startsWith('INSERT INTO story_agent_refs')) {
                                 agentState.refs.push({
@@ -234,7 +285,7 @@ function createDb(accounts: (string | Account)[], stories: Story[], agentState?:
                                     metadata: params[3],
                                     created: new Date().toISOString()
                                 });
-                                return { meta: { last_row_id: agentState.nextEventId - 1 } };
+                                return { meta: { last_row_id: agentState.nextEventId - 1, changes: 1 } };
                             }
                             if (agentState && query.startsWith('INSERT INTO story_agent_messages')) {
                                 agentState.messages.push({
@@ -244,7 +295,7 @@ function createDb(accounts: (string | Account)[], stories: Story[], agentState?:
                                     content: params[2],
                                     created: new Date().toISOString()
                                 });
-                                return { meta: { last_row_id: agentState.nextMessageId - 1 } };
+                                return { meta: { last_row_id: agentState.nextMessageId - 1, changes: 1 } };
                             }
                             if (agentState && query.startsWith('UPDATE story_agent_jobs SET')) {
                                 const jobId = params[params.length - 1];
@@ -252,7 +303,19 @@ function createDb(accounts: (string | Account)[], stories: Story[], agentState?:
                                 if (job) updateAgentJobFromQuery(query, params, job);
                                 return { meta: { last_row_id: 1 } };
                             }
-                            return { meta: { last_row_id: 1 } };
+                            if (agentState && query.startsWith('DELETE FROM story_agent_')) {
+                                const jobId = params[0];
+                                if (query.startsWith('DELETE FROM story_agent_messages')) {
+                                    agentState.messages = agentState.messages.filter(item => item.job_id !== jobId);
+                                } else if (query.startsWith('DELETE FROM story_agent_events')) {
+                                    agentState.events = agentState.events.filter(item => item.job_id !== jobId);
+                                } else if (query.startsWith('DELETE FROM story_agent_refs')) {
+                                    agentState.refs = agentState.refs.filter(item => item.job_id !== jobId);
+                                } else if (query.startsWith('DELETE FROM story_agent_jobs')) {
+                                    agentState.jobs = agentState.jobs.filter(item => item.id !== jobId);
+                                }
+                            }
+                            return { meta: { last_row_id: 1, changes: 1 } };
                         }
                     };
                 },
@@ -260,6 +323,9 @@ function createDb(accounts: (string | Account)[], stories: Story[], agentState?:
                     return { results: stories as T[] };
                 }
             };
+        },
+        async batch(statements: D1PreparedStatement[]) {
+            return Promise.all(statements.map(statement => statement.run()));
         }
     } as unknown as D1Database;
 }
@@ -358,6 +424,29 @@ function createAgentState(): AgentState {
     };
 }
 
+function makeAgentJob(overrides: Partial<AgentJob> = {}): AgentJob {
+    const now = new Date().toISOString();
+    return {
+        id: 'job_test123456789012',
+        requested_by: 'test@example.com',
+        prompt: 'A quiet test story',
+        target_date: null,
+        status: 'running',
+        sprite_name: 'bedtime-stories',
+        sprite_session_id: null,
+        story_id: null,
+        title: null,
+        error: null,
+        callback_token_hash: '',
+        callback_token_expires: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        created: now,
+        updated: now,
+        started: now,
+        completed: null,
+        ...overrides
+    };
+}
+
 function createImagesWithCounter(store: Record<string, string>) {
     let count = 0;
     const bucket = {
@@ -416,6 +505,32 @@ async function workerFetch(url: string | Request, init?: RequestInit) {
 // `Request` to pass to `worker.fetch()`.
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 
+const GOOGLE_TEST_KID = 'google-test-key';
+const googleKeyPairPromise = generateKeyPair('RS256', { extractable: true });
+
+async function googleJwks() {
+    const { publicKey } = await googleKeyPairPromise;
+    const key = await exportJWK(publicKey);
+    return { keys: [{ ...key, kid: GOOGLE_TEST_KID, alg: 'RS256', use: 'sig' }] };
+}
+
+async function signGoogleIdToken(overrides: Record<string, unknown> = {}) {
+    const { privateKey } = await googleKeyPairPromise;
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+        sub: 'google-user-1',
+        email: 'test@example.com',
+        email_verified: true,
+        ...overrides
+    })
+        .setProtectedHeader({ alg: 'RS256', kid: GOOGLE_TEST_KID })
+        .setIssuer(typeof overrides.iss === 'string' ? overrides.iss : 'https://accounts.google.com')
+        .setAudience(typeof overrides.aud === 'string' ? overrides.aud : 'test')
+        .setIssuedAt(now)
+        .setExpirationTime(typeof overrides.exp === 'number' ? overrides.exp : now + 300)
+        .sign(privateKey);
+}
+
 describe('Story page', () => {
         beforeEach(() => {
                 env.GOOGLE_CLIENT_ID = 'test';
@@ -436,12 +551,19 @@ describe('Story page', () => {
         });
 
         it('signs and verifies JWTs', async () => {
+                expect(SESSION_MAXAGE).toBe(7 * 24 * 60 * 60);
                 const jwt = await signSession('alice@example.com', env);
                 expect(await verifySession(jwt, env)).toBe('alice@example.com');
                 const originalNow = Date.now;
                 Date.now = () => (SESSION_MAXAGE + 1) * 1000 + originalNow();
                 expect(await verifySession(jwt, env)).toBeNull();
                 Date.now = originalNow;
+        });
+
+        it('compares secrets through fixed-length hashes', async () => {
+                expect(await timingSafeEqualString('same-secret', 'same-secret')).toBe(true);
+                expect(await timingSafeEqualString('short', 'a-much-longer-secret')).toBe(false);
+                expect(await timingSafeEqualString('', '')).toBe(false);
         });
 
         it('serves the story viewer (unit style)', async () => {
@@ -482,10 +604,11 @@ describe('Story page', () => {
                 const response = await workerFetch('https://example.com/manage', { headers: { cookie: `session=${jwt}` } });
                 const body = await response.text();
                 expect(body).toContain('Manage Stories');
-                expect(body).toContain('Submit New Story');
-                expect(body).toContain('Generate with Codex');
+                expect(body).toContain('/assets/manage.js');
+                expect(body).not.toContain('unpkg.com');
                 expect(response.headers.get('Cache-Control')).toBe('no-store');
                 expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+                expect(response.headers.get('Content-Security-Policy')).toContain("default-src 'self'; script-src 'self'");
         });
 
         it('serves the manage page with trailing slash', async () => {
@@ -493,8 +616,7 @@ describe('Story page', () => {
                 const response = await workerFetch('https://example.com/manage/', { headers: { cookie: `session=${jwt}` } });
                 const body = await response.text();
                 expect(body).toContain('Manage Stories');
-                expect(body).toContain('Submit New Story');
-                expect(body).toContain('Generate with Codex');
+                expect(body).toContain('/assets/manage.js');
         });
 
         it('serves the Codex generation page', async () => {
@@ -502,7 +624,7 @@ describe('Story page', () => {
                 const response = await workerFetch('https://example.com/generate-story', { headers: { cookie: `session=${jwt}` } });
                 const body = await response.text();
                 expect(body).toContain('Generate Story with Codex');
-                expect(body).toContain('Jobs');
+                expect(body).toContain('/assets/generate-story.js');
                 expect(response.headers.get('Cache-Control')).toBe('no-store');
                 expect(response.headers.get('X-Frame-Options')).toBe('DENY');
         });
@@ -512,7 +634,23 @@ describe('Story page', () => {
                 const response = await workerFetch('https://example.com/generate-story/', { headers: { cookie: `session=${jwt}` } });
                 const body = await response.text();
                 expect(body).toContain('Generate Story with Codex');
-                expect(body).toContain('Manage Stories');
+                expect(body).toContain('/assets/generate-story.js');
+        });
+
+        it('serves self-hosted frontend scripts under the strict CSP', async () => {
+                const jwt = await signSession('test@example.com', env);
+                const manage = await workerFetch('https://example.com/assets/manage.js', {
+                        headers: { cookie: `session=${jwt}` }
+                });
+                expect(manage.status).toBe(200);
+                expect(await manage.text()).toContain('Submit New Story');
+                expect(manage.headers.get('X-Content-Type-Options')).toBe('nosniff');
+
+                const react = await workerFetch('https://example.com/vendor/react-18.3.1.production.min.js', {
+                        headers: { cookie: `session=${jwt}` }
+                });
+                expect(react.status).toBe(200);
+                expect(react.headers.get('Cache-Control')).toContain('immutable');
         });
 
         it('denies reader accounts access to editor pages', async () => {
@@ -524,6 +662,20 @@ describe('Story page', () => {
                 expect(resp.status).toBe(403);
                 const generateResp = await workerFetch('https://example.com/generate-story', { headers: { cookie: `session=${jwt}` } });
                 expect(generateResp.status).toBe(403);
+        });
+
+        it('fails closed for empty allowlists and unknown account roles', async () => {
+                env.DB = createAllowedDb([]);
+                expect(await getAccountRole('anyone@example.com', env)).toBeNull();
+
+                env.DB = createAllowedDb([{ email: 'bad@example.com', role: 'administrator' as never }]);
+                expect(await getAccountRole('bad@example.com', env)).toBeNull();
+
+                const jwt = await signSession('bad@example.com', env);
+                const response = await workerFetch('https://example.com/manage', {
+                        headers: { cookie: `session=${jwt}` }
+                });
+                expect(response.status).toBe(403);
         });
 
         it('hides future stories from default endpoint', async () => {
@@ -641,12 +793,19 @@ describe('Story page', () => {
 
         it('does not leak session tokens in OAuth callback redirect locations', async () => {
                 const originalFetch = globalThis.fetch;
+                const idToken = await signGoogleIdToken();
+                const jwks = await googleJwks();
                 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
                         const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
                         if (url === 'https://oauth2.googleapis.com/token') {
-                                return new Response(JSON.stringify({ id_token: 'test-token' }), {
+                                return new Response(JSON.stringify({ id_token: idToken }), {
                                         status: 200,
                                         headers: { 'content-type': 'application/json' }
+                                });
+                        }
+                        if (url === 'https://www.googleapis.com/oauth2/v3/certs') {
+                                return Response.json(jwks, {
+                                        headers: { 'Cache-Control': 'public, max-age=600' }
                                 });
                         }
                         return originalFetch(input as any, init);
@@ -660,6 +819,37 @@ describe('Story page', () => {
                         expect(location).not.toContain('token=');
                         expect(response.headers.get('Cache-Control')).toBe('no-store');
                         expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+                } finally {
+                        globalThis.fetch = originalFetch;
+                }
+        });
+
+        it('rejects callback URL session tokens', async () => {
+                const jwt = await signSession('test@example.com', env);
+                const response = await workerFetch(new Request(
+                        `https://example.com/oauth/callback?token=${encodeURIComponent(jwt)}`,
+                        { redirect: 'manual' }
+                ));
+                expect(response.status).toBe(400);
+                expect(response.headers.get('Set-Cookie')).toBeNull();
+        });
+
+        it('validates Google issuer, audience, expiry, and verified email claims', async () => {
+                const originalFetch = globalThis.fetch;
+                const jwks = await googleJwks();
+                globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+                        if (url === 'https://www.googleapis.com/oauth2/v3/certs') {
+                                return Response.json(jwks, { headers: { 'Cache-Control': 'public, max-age=600' } });
+                        }
+                        return originalFetch(input as any, init);
+                }) as any;
+                try {
+                        expect(await verifyGoogleToken(await signGoogleIdToken(), env)).toBe('test@example.com');
+                        expect(await verifyGoogleToken(await signGoogleIdToken({ iss: 'https://attacker.example' }), env)).toBeNull();
+                        expect(await verifyGoogleToken(await signGoogleIdToken({ aud: 'other-client' }), env)).toBeNull();
+                        expect(await verifyGoogleToken(await signGoogleIdToken({ exp: Math.floor(Date.now() / 1000) - 1 }), env)).toBeNull();
+                        expect(await verifyGoogleToken(await signGoogleIdToken({ email_verified: false }), env)).toBeNull();
                 } finally {
                         globalThis.fetch = originalFetch;
                 }
@@ -700,6 +890,50 @@ describe('Story page', () => {
                 expect(put).not.toBeNull();
                 expect(put!.value).toBeInstanceOf(ReadableStream);
                 expect((put!.options as any)?.httpMetadata?.contentType).toBe('image/jpeg');
+        });
+
+        it('rejects oversized request bodies before multipart or JSON parsing', async () => {
+                env.STORY_API_TOKEN = 'story-token';
+                let response = await workerFetch(new Request('https://example.com/api/media', {
+                        method: 'POST',
+                        headers: {
+                                'X-Story-Token': 'story-token',
+                                'Content-Type': 'multipart/form-data; boundary=test',
+                                'Content-Length': String(52 * 1024 * 1024)
+                        },
+                        body: '--test--'
+                }));
+                expect(response.status).toBe(413);
+
+                response = await workerFetch(new Request('https://example.com/api/stories', {
+                        method: 'POST',
+                        headers: {
+                                'X-Story-Token': 'story-token',
+                                'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ title: 'T', content: 'x'.repeat(70 * 1024) })
+                }));
+                expect(response.status).toBe(413);
+        });
+
+        it('applies browser-equivalent field limits to the story automation API', async () => {
+                env.STORY_API_TOKEN = 'story-token';
+                const postStory = (payload: Record<string, unknown>) => workerFetch(new Request('https://example.com/api/stories', {
+                        method: 'POST',
+                        headers: {
+                                'X-Story-Token': 'story-token',
+                                'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(payload)
+                }));
+
+                expect((await postStory({ title: 'x'.repeat(201), content: 'story' })).status).toBe(400);
+                expect((await postStory({ title: 'Title', content: 'x'.repeat(50_001) })).status).toBe(400);
+                expect((await postStory({
+                        title: 'Title',
+                        content: 'story',
+                        image_url: '../private-key'
+                })).status).toBe(400);
         });
 
         it('returns 400 for invalid dates on /stories form endpoints', async () => {
@@ -783,6 +1017,63 @@ describe('Story page', () => {
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).not.toContain('STORY_AGENT_ENV');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).not.toContain('& &&');
                         expect(agentState.events.some(event => event.message.includes('launch command accepted'))).toBe(true);
+                } finally {
+                        globalThis.fetch = originalFetch;
+                }
+        });
+
+        it('enforces per-user story-agent concurrency and hourly admission limits', async () => {
+                const originalFetch = globalThis.fetch;
+                globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+                        if (url.startsWith('https://api.sprites.dev/')) return Response.json({ ok: true });
+                        return originalFetch(input as any, init);
+                }) as any;
+
+                try {
+                        const agentState = createAgentState();
+                        env.DB = createDb(['test@example.com'], [], agentState);
+                        env.IMAGES = createAgentImages().bucket;
+                        env.STORY_AGENT_ALLOWED_EMAILS = 'test@example.com';
+                        env.SPRITES_API_TOKEN = 'sprites-token';
+                        const jwt = await signSession('test@example.com', env);
+
+                        const firstData = new FormData();
+                        firstData.set('prompt', 'First active story');
+                        const first = await workerFetch(new Request('https://example.com/agent/jobs', {
+                                method: 'POST',
+                                headers: { cookie: `session=${jwt}` },
+                                body: firstData
+                        }));
+                        expect(first.status).toBe(202);
+
+                        const secondData = new FormData();
+                        secondData.set('prompt', 'Second concurrent story');
+                        const second = await workerFetch(new Request('https://example.com/agent/jobs', {
+                                method: 'POST',
+                                headers: { cookie: `session=${jwt}` },
+                                body: secondData
+                        }));
+                        expect(second.status).toBe(409);
+                        expect(agentState.jobs).toHaveLength(1);
+
+                        const now = new Date().toISOString();
+                        agentState.jobs = Array.from({ length: 5 }, (_, index) => makeAgentJob({
+                                id: `job_rate1234567890${index}`,
+                                status: 'complete',
+                                created: now,
+                                updated: now,
+                                completed: now
+                        }));
+                        const rateData = new FormData();
+                        rateData.set('prompt', 'Sixth story this hour');
+                        const rateLimited = await workerFetch(new Request('https://example.com/agent/jobs', {
+                                method: 'POST',
+                                headers: { cookie: `session=${jwt}` },
+                                body: rateData
+                        }));
+                        expect(rateLimited.status).toBe(429);
+                        expect(rateLimited.headers.get('Retry-After')).toBe('3600');
                 } finally {
                         globalThis.fetch = originalFetch;
                 }
@@ -891,6 +1182,7 @@ describe('Story page', () => {
                         title: null,
                         error: null,
                         callback_token_hash: await sha256Hex(token),
+                        callback_token_expires: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
                         created: new Date().toISOString(),
                         updated: new Date().toISOString(),
                         started: null,
@@ -946,6 +1238,12 @@ describe('Story page', () => {
                 expect(response.status).toBe(200);
                 expect(agentState.jobs[0].status).toBe('complete');
                 expect(agentState.jobs[0].story_id).toBe(42);
+                expect(agentState.jobs[0].callback_token_hash).toBe('');
+
+                response = await workerFetch(`https://example.com/api/agent/jobs/${jobId}/bootstrap`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                });
+                expect(response.status).toBe(401);
 
                 response = await workerFetch(`https://example.com/agent/jobs/${jobId}/events`, {
                         headers: { cookie: `session=${jwt}` }
@@ -953,6 +1251,57 @@ describe('Story page', () => {
                 const events = await response.text();
                 expect(events).toContain('event: log');
                 expect(events).toContain('event: complete');
+        });
+
+        it('expires and revokes stale runner callback credentials', async () => {
+                const token = 'expired-runner-token';
+                const jobId = 'job_expired123456789';
+                const agentState = createAgentState();
+                agentState.jobs.push(makeAgentJob({
+                        id: jobId,
+                        callback_token_hash: await sha256Hex(token),
+                        callback_token_expires: new Date(Date.now() - 1000).toISOString()
+                }));
+                env.DB = createDb(['test@example.com'], [], agentState);
+
+                const response = await workerFetch(`https://example.com/api/agent/jobs/${jobId}/bootstrap`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                });
+                expect(response.status).toBe(401);
+                expect(agentState.jobs[0].status).toBe('failed');
+                expect(agentState.jobs[0].callback_token_hash).toBe('');
+                expect(agentState.jobs[0].completed).not.toBeNull();
+        });
+
+        it('purges terminal story-agent records and reference images after retention', async () => {
+                const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+                const jobId = 'job_retained123456789';
+                const agentState = createAgentState();
+                agentState.jobs.push(makeAgentJob({
+                        id: jobId,
+                        status: 'complete',
+                        created: old,
+                        updated: old,
+                        completed: old
+                }));
+                agentState.refs.push({
+                        id: 1,
+                        job_id: jobId,
+                        r2_key: 'old-reference.jpg',
+                        filename: 'old-reference.jpg',
+                        content_type: 'image/jpeg'
+                });
+                const { bucket, store } = createAgentImages();
+                await bucket.put('old-reference.jpg', new Uint8Array([1]), {
+                        httpMetadata: { contentType: 'image/jpeg' }
+                });
+                env.DB = createDb(['test@example.com'], [], agentState);
+                env.IMAGES = bucket;
+
+                await maintainAgentJobs(env);
+                expect(agentState.jobs).toHaveLength(0);
+                expect(agentState.refs).toHaveLength(0);
+                expect(store.has('old-reference.jpg')).toBe(false);
         });
 
         it('cancels active story agent jobs and asks Sprite to stop the runner', async () => {
@@ -982,6 +1331,7 @@ describe('Story page', () => {
                                 title: null,
                                 error: null,
                                 callback_token_hash: await sha256Hex('runner-token'),
+                                callback_token_expires: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
                                 created: new Date().toISOString(),
                                 updated: new Date().toISOString(),
                                 started: null,
@@ -998,6 +1348,7 @@ describe('Story page', () => {
                         });
                         expect(response.status).toBe(200);
                         expect(agentState.jobs[0].status).toBe('canceled');
+                        expect(agentState.jobs[0].callback_token_hash).toBe('');
                         expect(spriteRequests).toHaveLength(1);
                         expect(new URL(spriteRequests[0]).searchParams.getAll('cmd').join(' ')).toContain(jobId);
                         expect(new URL(spriteRequests[0]).searchParams.getAll('cmd').join(' ')).toContain('http://sprite/v1/tasks/story-agent-job-abcdef1234567890');
@@ -1022,6 +1373,7 @@ describe('Story page', () => {
                         title: null,
                         error: null,
                         callback_token_hash: await sha256Hex(token),
+                        callback_token_expires: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
                         created: new Date().toISOString(),
                         updated: new Date().toISOString(),
                         started: null,
@@ -1034,9 +1386,7 @@ describe('Story page', () => {
                         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
                         body: JSON.stringify({ status: 'complete', story_id: 42, title: 'Too Late' })
                 });
-                expect(response.status).toBe(200);
-                const body = await response.json<any>();
-                expect(body.ignored).toBe(true);
+                expect(response.status).toBe(401);
                 expect(agentState.jobs[0].status).toBe('canceled');
                 expect(agentState.jobs[0].story_id).toBeNull();
                 expect(agentState.jobs[0].title).toBeNull();
@@ -1065,5 +1415,10 @@ describe('Story page', () => {
                 expect(STORY_AGENT_RUNNER).not.toContain('.codex/auth.json');
                 expect(STORY_AGENT_RUNNER).toContain('"User-Agent": USER_AGENT');
                 expect(STORY_AGENT_RUNNER).toContain('headers={"Authorization": "Bearer " + JOB_TOKEN, "User-Agent": USER_AGENT}');
+                expect(STORY_AGENT_RUNNER).toContain('MAX_RUNTIME_SECONDS = 50 * 60');
+                expect(STORY_AGENT_RUNNER).toContain('MAX_CAPTURE_CHARS = 2 * 1024 * 1024');
+                expect(STORY_AGENT_RUNNER).toContain('start_new_session=True');
+                expect(STORY_AGENT_RUNNER).toContain('os.killpg(proc.pid, signal.SIGKILL)');
+                expect(STORY_AGENT_RUNNER).not.toContain('result_path.read_text');
         });
 });

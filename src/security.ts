@@ -1,18 +1,12 @@
 const encoder = new TextEncoder();
 
-export function timingSafeEqualString(provided: string, expected: string): boolean {
-    const expectedBytes = encoder.encode(expected);
-    const providedBytes = encoder.encode(provided);
-    if (expectedBytes.length === 0) return false;
-
-    if (providedBytes.length !== expectedBytes.length) {
-        const padded = new Uint8Array(expectedBytes.length);
-        padded.set(providedBytes.slice(0, expectedBytes.length));
-        crypto.subtle.timingSafeEqual(padded, expectedBytes);
-        return false;
-    }
-
-    return crypto.subtle.timingSafeEqual(providedBytes, expectedBytes);
+export async function timingSafeEqualString(provided: string, expected: string): Promise<boolean> {
+    const [providedHash, expectedHash] = await Promise.all([
+        crypto.subtle.digest('SHA-256', encoder.encode(provided)),
+        crypto.subtle.digest('SHA-256', encoder.encode(expected))
+    ]);
+    const equal = crypto.subtle.timingSafeEqual(providedHash, expectedHash);
+    return expected.length > 0 && equal;
 }
 
 export function bearerToken(request: Request): string | null {

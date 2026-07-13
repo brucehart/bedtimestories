@@ -21,6 +21,14 @@ const MAX_AGENT_EVENT_MESSAGE_LENGTH = 8000;
 const MAX_AGENT_ERROR_LENGTH = 2000;
 const MAX_AGENT_TITLE_LENGTH = 200;
 const MAX_SPRITE_ERROR_SNIPPET_BYTES = 500;
+const MAX_AGENT_FORM_BYTES = MAX_AGENT_REF_IMAGES * MAX_AGENT_REF_IMAGE_BYTES + 1024 * 1024;
+const MAX_AGENT_JSON_BYTES = 16 * 1024;
+const MAX_AGENT_EVENTS = 2000;
+const MAX_AGENT_MESSAGES = 100;
+const MAX_ACTIVE_JOBS_PER_USER = 1;
+const MAX_JOBS_PER_USER_PER_HOUR = 5;
+const CALLBACK_TOKEN_TTL_MS = 60 * 60 * 1000;
+const JOB_RETENTION_DAYS = 7;
 
 const AGENT_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const JOB_ID_RE = /^[A-Za-z0-9_-]{16,80}$/;
@@ -43,6 +51,7 @@ interface AgentJobRow {
     started: string | null;
     completed: string | null;
     callback_token_hash: string;
+    callback_token_expires: string | null;
 }
 
 interface AgentRefRow {
@@ -83,6 +92,86 @@ function textResponse(value: string, init?: ResponseInit): Response {
     headers.set('Cache-Control', 'no-store');
     headers.set('Referrer-Policy', 'no-referrer');
     return new Response(value, { ...init, headers });
+}
+
+async function readBodyWithLimit(request: Request, maxBytes: number): Promise<Uint8Array> {
+    const rawLength = request.headers.get('Content-Length');
+    if (rawLength !== null) {
+        const contentLength = Number(rawLength);
+        if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+            throw new TypeError('Invalid Content-Length');
+        }
+        if (contentLength > maxBytes) throw new RangeError('Payload Too Large');
+    }
+    if (!request.body) return new Uint8Array();
+
+    const reader = request.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (!value) continue;
+            total += value.byteLength;
+            if (total > maxBytes) throw new RangeError('Payload Too Large');
+            chunks.push(value);
+        }
+    } finally {
+        await reader.cancel().catch(() => undefined);
+    }
+
+    const body = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+        body.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+    return body;
+}
+
+async function parseAgentFormData(request: Request): Promise<FormData | Response> {
+    const rawLength = request.headers.get('Content-Length');
+    if (rawLength !== null) {
+        const contentLength = Number(rawLength);
+        if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+            return new Response('Invalid Content-Length', { status: 400 });
+        }
+        if (contentLength > MAX_AGENT_FORM_BYTES) {
+            return new Response('Payload Too Large', { status: 413 });
+        }
+        try {
+            return await request.formData();
+        } catch {
+            return new Response('Invalid multipart form data', { status: 400 });
+        }
+    }
+    try {
+        const body = await readBodyWithLimit(request, MAX_AGENT_FORM_BYTES);
+        const boundedRequest = new Request(request.url, {
+            method: request.method,
+            headers: request.headers,
+            body
+        });
+        return await boundedRequest.formData();
+    } catch (error) {
+        if (error instanceof RangeError) return new Response('Payload Too Large', { status: 413 });
+        return new Response('Invalid multipart form data', { status: 400 });
+    }
+}
+
+async function parseAgentJson(request: Request): Promise<Record<string, unknown> | Response> {
+    try {
+        const body = await readBodyWithLimit(request, MAX_AGENT_JSON_BYTES);
+        const value: unknown = JSON.parse(new TextDecoder().decode(body));
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return new Response('Invalid JSON payload', { status: 400 });
+        }
+        return value as Record<string, unknown>;
+    } catch (error) {
+        if (error instanceof RangeError) return new Response('Payload Too Large', { status: 413 });
+        return new Response('Invalid JSON payload', { status: 400 });
+    }
 }
 
 async function readResponseSnippet(response: Response, maxBytes: number): Promise<string> {
@@ -218,7 +307,16 @@ async function getJobForCallback(env: Env, request: Request, jobId: string): Pro
         .first<AgentJobRow>();
     if (!row) return new Response('Not Found', { status: 404 });
     const providedHash = await sha256Hex(token);
-    if (!timingSafeEqualString(providedHash, row.callback_token_hash)) {
+    if (!(await timingSafeEqualString(providedHash, row.callback_token_hash))) {
+        return new Response('Unauthorized', { status: 401 });
+    }
+    const expiresAt = row.callback_token_expires ? Date.parse(row.callback_token_expires) : Number.NaN;
+    if (TERMINAL_STATUS.has(row.status) || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        if (!TERMINAL_STATUS.has(row.status)) {
+            await updateJobStatus(env, jobId, 'failed', { error: 'Story agent job exceeded its maximum duration.' });
+            await appendAgentEvent(env, jobId, 'failed', 'Story agent job expired.');
+            await cancelSpriteJob(env, jobId).catch(() => undefined);
+        }
         return new Response('Unauthorized', { status: 401 });
     }
     return row;
@@ -235,9 +333,11 @@ async function appendAgentEvent(
     const safeMessage = message.slice(0, MAX_AGENT_EVENT_MESSAGE_LENGTH);
     const metadataJson = metadata === undefined ? null : JSON.stringify(metadata).slice(0, 12000);
     await env.DB.prepare(
-        'INSERT INTO story_agent_events (job_id, event_type, message, metadata, created) VALUES (?1, ?2, ?3, ?4, datetime(\'now\'))'
+        'INSERT INTO story_agent_events (job_id, event_type, message, metadata, created) ' +
+        'SELECT ?1, ?2, ?3, ?4, datetime(\'now\') WHERE ' +
+        '(SELECT COUNT(*) FROM story_agent_events WHERE job_id = ?1) < ?5'
     )
-        .bind(jobId, safeEventType, safeMessage, metadataJson)
+        .bind(jobId, safeEventType, safeMessage, metadataJson, MAX_AGENT_EVENTS)
         .run();
 }
 
@@ -265,7 +365,11 @@ async function updateJobStatus(
     const setParts = ['status = ?1', "updated = datetime('now')"];
     const values: (string | number | null)[] = [status];
     if (status === 'running') setParts.push("started = COALESCE(started, datetime('now'))");
-    if (TERMINAL_STATUS.has(status)) setParts.push("completed = COALESCE(completed, datetime('now'))");
+    if (TERMINAL_STATUS.has(status)) {
+        setParts.push("completed = COALESCE(completed, datetime('now'))");
+        setParts.push("callback_token_hash = ''");
+        setParts.push("callback_token_expires = datetime('now')");
+    }
     if (fields?.storyId !== undefined) {
         values.push(fields.storyId);
         setParts.push(`story_id = ?${values.length}`);
@@ -389,6 +493,49 @@ async function cancelSpriteJob(env: Env, jobId: string) {
     });
 }
 
+export async function maintainAgentJobs(env: Env): Promise<void> {
+    const nowIso = new Date().toISOString();
+    const { results: expiredJobs } = await env.DB.prepare(
+        "SELECT id FROM story_agent_jobs WHERE status IN ('queued', 'starting', 'running') " +
+        'AND (callback_token_expires IS NULL OR callback_token_expires <= ?1) LIMIT 25'
+    )
+        .bind(nowIso)
+        .all<{ id: string }>();
+
+    for (const job of expiredJobs) {
+        await updateJobStatus(env, job.id, 'failed', {
+            error: 'Story agent job exceeded its maximum duration.'
+        });
+        await appendAgentEvent(env, job.id, 'failed', 'Story agent job expired.');
+        await cancelSpriteJob(env, job.id).catch(() => undefined);
+    }
+
+    const retentionCutoff = new Date(Date.now() - JOB_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const { results: purgeJobs } = await env.DB.prepare(
+        "SELECT id FROM story_agent_jobs WHERE status IN ('complete', 'failed', 'canceled') " +
+        'AND COALESCE(completed, updated, created) <= ?1 LIMIT 25'
+    )
+        .bind(retentionCutoff)
+        .all<{ id: string }>();
+
+    for (const job of purgeJobs) {
+        const { results: refs } = await env.DB.prepare(
+            'SELECT r2_key FROM story_agent_refs WHERE job_id = ?1'
+        )
+            .bind(job.id)
+            .all<{ r2_key: string }>();
+        for (const ref of refs) {
+            await env.IMAGES.delete(ref.r2_key).catch(() => undefined);
+        }
+        await env.DB.batch([
+            env.DB.prepare('DELETE FROM story_agent_messages WHERE job_id = ?1').bind(job.id),
+            env.DB.prepare('DELETE FROM story_agent_events WHERE job_id = ?1').bind(job.id),
+            env.DB.prepare('DELETE FROM story_agent_refs WHERE job_id = ?1').bind(job.id),
+            env.DB.prepare('DELETE FROM story_agent_jobs WHERE id = ?1').bind(job.id)
+        ]);
+    }
+}
+
 function quoteShell(value: string): string {
     return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -416,8 +563,14 @@ export async function createAgentJob(request: Request, env: Env, ctx: ExecutionC
     if (!spriteConfig(env).token) {
         return new Response('SPRITES_API_TOKEN is not configured', { status: 503 });
     }
+    try {
+        await maintainAgentJobs(env);
+    } catch {
+        return new Response('Story agent maintenance unavailable', { status: 503 });
+    }
 
-    const data = await request.formData();
+    const data = await parseAgentFormData(request);
+    if (data instanceof Response) return data;
     const promptValue = data.get('prompt');
     const dateValue = data.get('date');
     if (typeof promptValue !== 'string') {
@@ -447,23 +600,66 @@ export async function createAgentJob(request: Request, env: Env, ctx: ExecutionC
     const jobId = randomToken(18);
     const callbackToken = randomToken(32);
     const callbackTokenHash = await sha256Hex(callbackToken);
+    const callbackTokenExpires = new Date(Date.now() + CALLBACK_TOKEN_TTL_MS).toISOString();
     const config = spriteConfig(env);
-    await env.DB.prepare(
-        'INSERT INTO story_agent_jobs (id, requested_by, prompt, target_date, status, sprite_name, callback_token_hash, created, updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime(\'now\'), datetime(\'now\'))'
+    const insertResult = await env.DB.prepare(
+        'INSERT INTO story_agent_jobs ' +
+        '(id, requested_by, prompt, target_date, status, sprite_name, callback_token_hash, callback_token_expires, created, updated) ' +
+        'SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime(\'now\'), datetime(\'now\') WHERE ' +
+        "(SELECT COUNT(*) FROM story_agent_jobs WHERE LOWER(requested_by) = LOWER(?2) AND status IN ('queued', 'starting', 'running')) < ?9 " +
+        "AND (SELECT COUNT(*) FROM story_agent_jobs WHERE LOWER(requested_by) = LOWER(?2) AND created >= datetime('now', '-1 hour')) < ?10"
     )
-        .bind(jobId, auth.email, prompt, targetDate, 'queued', config.spriteName, callbackTokenHash)
-        .run();
-
-    let refIndex = 0;
-    for (const file of files) {
-        refIndex++;
-        const key = `agent-jobs/${jobId}/${crypto.randomUUID()}${uploadExtension(file.type.toLowerCase())}`;
-        await env.IMAGES.put(key, file.stream(), { httpMetadata: { contentType: file.type } });
-        await env.DB.prepare(
-            'INSERT INTO story_agent_refs (job_id, r2_key, filename, content_type, created) VALUES (?1, ?2, ?3, ?4, datetime(\'now\'))'
+        .bind(
+            jobId,
+            auth.email,
+            prompt,
+            targetDate,
+            'queued',
+            config.spriteName,
+            callbackTokenHash,
+            callbackTokenExpires,
+            MAX_ACTIVE_JOBS_PER_USER,
+            MAX_JOBS_PER_USER_PER_HOUR
         )
-            .bind(jobId, key, file.name || `reference-${refIndex}${uploadExtension(file.type.toLowerCase())}`, file.type)
-            .run();
+        .run();
+    if (insertResult.meta.changes === 0) {
+        const counts = await env.DB.prepare(
+            "SELECT SUM(CASE WHEN status IN ('queued', 'starting', 'running') THEN 1 ELSE 0 END) AS active, " +
+            "SUM(CASE WHEN created >= datetime('now', '-1 hour') THEN 1 ELSE 0 END) AS recent " +
+            'FROM story_agent_jobs WHERE LOWER(requested_by) = LOWER(?1)'
+        )
+            .bind(auth.email)
+            .first<{ active: number | null; recent: number | null }>();
+        if ((counts?.active || 0) >= MAX_ACTIVE_JOBS_PER_USER) {
+            return new Response('A story agent job is already active', { status: 409 });
+        }
+        return new Response('Story agent job rate limit exceeded', {
+            status: 429,
+            headers: { 'Retry-After': '3600' }
+        });
+    }
+
+    const uploadedRefKeys: string[] = [];
+    try {
+        let refIndex = 0;
+        for (const file of files) {
+            refIndex++;
+            const key = `agent-jobs/${jobId}/${crypto.randomUUID()}${uploadExtension(file.type.toLowerCase())}`;
+            await env.IMAGES.put(key, file.stream(), { httpMetadata: { contentType: file.type } });
+            uploadedRefKeys.push(key);
+            await env.DB.prepare(
+                'INSERT INTO story_agent_refs (job_id, r2_key, filename, content_type, created) VALUES (?1, ?2, ?3, ?4, datetime(\'now\'))'
+            )
+                .bind(jobId, key, file.name || `reference-${refIndex}${uploadExtension(file.type.toLowerCase())}`, file.type)
+                .run();
+        }
+    } catch {
+        for (const key of uploadedRefKeys) {
+            await env.IMAGES.delete(key).catch(() => undefined);
+        }
+        await updateJobStatus(env, jobId, 'failed', { error: 'Reference image upload failed.' });
+        await appendAgentEvent(env, jobId, 'failed', 'Reference image upload failed.');
+        return new Response('Reference image upload failed', { status: 500 });
     }
 
     await appendAgentEvent(env, jobId, 'status', 'Story agent job queued.');
@@ -485,6 +681,7 @@ export async function createAgentJob(request: Request, env: Env, ctx: ExecutionC
 export async function listAgentJobs(_request: Request, env: Env, auth: AuthInfo) {
     const authError = agentAuthError(auth, env);
     if (authError) return authError;
+    await maintainAgentJobs(env);
     const { results } = await env.DB.prepare(
         'SELECT * FROM story_agent_jobs WHERE LOWER(requested_by) = LOWER(?1) ORDER BY created DESC LIMIT 10'
     )
@@ -543,15 +740,21 @@ export async function createAgentMessage(request: Request, env: Env, auth: AuthI
     if (TERMINAL_STATUS.has(row.status)) {
         return new Response('Job is not active', { status: 409 });
     }
-    const payload = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+    const payload = await parseAgentJson(request);
+    if (payload instanceof Response) return payload;
     const content = typeof payload?.content === 'string' ? payload.content.trim() : '';
     if (!content) return new Response('Missing content', { status: 400 });
     if (content.length > MAX_AGENT_MESSAGE_LENGTH) return new Response('Message too long', { status: 400 });
     const result = await env.DB.prepare(
-        'INSERT INTO story_agent_messages (job_id, author_email, content, created) VALUES (?1, ?2, ?3, datetime(\'now\'))'
+        'INSERT INTO story_agent_messages (job_id, author_email, content, created) ' +
+        'SELECT ?1, ?2, ?3, datetime(\'now\') WHERE ' +
+        '(SELECT COUNT(*) FROM story_agent_messages WHERE job_id = ?1) < ?4'
     )
-        .bind(jobId, auth.email, content)
+        .bind(jobId, auth.email, content, MAX_AGENT_MESSAGES)
         .run();
+    if (result.meta.changes === 0) {
+        return new Response('Job feedback limit exceeded', { status: 429 });
+    }
     await appendAgentEvent(env, jobId, 'feedback', 'Feedback queued for Codex.');
     return jsonResponse({ id: result.meta.last_row_id });
 }
@@ -636,7 +839,8 @@ export async function getRunnerMessages(request: Request, env: Env, jobId: strin
 export async function createRunnerEvent(request: Request, env: Env, jobId: string) {
     const row = await getJobForCallback(env, request, jobId);
     if (row instanceof Response) return row;
-    const payload = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+    const payload = await parseAgentJson(request);
+    if (payload instanceof Response) return payload;
     const eventType = typeof payload?.type === 'string' ? payload.type : 'log';
     const message = typeof payload?.message === 'string' ? payload.message : '';
     const metadata = payload?.metadata;
@@ -648,7 +852,8 @@ export async function createRunnerEvent(request: Request, env: Env, jobId: strin
 export async function updateRunnerJob(request: Request, env: Env, jobId: string) {
     const row = await getJobForCallback(env, request, jobId);
     if (row instanceof Response) return row;
-    const payload = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+    const payload = await parseAgentJson(request);
+    if (payload instanceof Response) return payload;
     const status = typeof payload?.status === 'string' ? payload.status : '';
     if (!JOB_STATUS.has(status)) return new Response('Invalid status', { status: 400 });
     if (TERMINAL_STATUS.has(row.status)) {

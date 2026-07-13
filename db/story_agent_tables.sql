@@ -10,6 +10,7 @@ CREATE TABLE story_agent_jobs (
   title               TEXT,
   error               TEXT,
   callback_token_hash TEXT NOT NULL,
+  callback_token_expires DATETIME NOT NULL,
   created             DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated             DATETIME DEFAULT CURRENT_TIMESTAMP,
   started             DATETIME,
@@ -18,6 +19,7 @@ CREATE TABLE story_agent_jobs (
 
 CREATE INDEX idx_story_agent_jobs_requested_by ON story_agent_jobs (requested_by, created DESC);
 CREATE INDEX idx_story_agent_jobs_status ON story_agent_jobs (status, created DESC);
+CREATE INDEX idx_story_agent_jobs_callback_expiry ON story_agent_jobs (callback_token_expires);
 
 CREATE TABLE story_agent_refs (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -31,6 +31,7 @@ OPENAI_SIZE = "1280x720"
 # as close as possible to the prior 5-second target.
 OPENAI_SECONDS = 4
 DEFAULT_POLL_SECONDS = 10
+DEFAULT_POLL_TIMEOUT_SECONDS = 30 * 60
 
 
 def log(msg: str) -> None:
@@ -49,7 +50,18 @@ def read_poll_seconds() -> int:
     if value < 1:
         log(f"STORY_VIDEO_POLL_SECONDS must be >= 1 (using {DEFAULT_POLL_SECONDS})")
         return DEFAULT_POLL_SECONDS
-    return value
+    return min(value, 60)
+
+
+def read_poll_timeout_seconds() -> int:
+    raw = os.environ.get("STORY_VIDEO_POLL_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_POLL_TIMEOUT_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_POLL_TIMEOUT_SECONDS
+    return min(max(value, 60), 45 * 60)
 
 
 def to_data_uri(path: str) -> str:
@@ -75,8 +87,11 @@ def replicate_request(token: str, method: str, url: str, payload: dict | None = 
 
 def wait_for_prediction(token: str, prediction_id: str) -> dict:
     poll_seconds = read_poll_seconds()
+    deadline = time.monotonic() + read_poll_timeout_seconds()
     url = f"{REPLICATE_API_BASE}/predictions/{prediction_id}"
     while True:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Video generation timed out while waiting for the provider.")
         pred = replicate_request(token, "GET", url)
         status = pred.get("status")
         if status == "succeeded":
@@ -204,6 +219,8 @@ def openai_multipart_request(token: str, prompt: str, model: str, prepared_path:
         [
             "curl",
             "-sS",
+            "--max-time",
+            "120",
             "-X",
             "POST",
             f"{OPENAI_API_BASE}/videos",
@@ -236,10 +253,13 @@ def openai_multipart_request(token: str, prompt: str, model: str, prepared_path:
 
 def wait_for_openai_video(token: str, video_id: str) -> dict:
     poll_seconds = read_poll_seconds()
+    deadline = time.monotonic() + read_poll_timeout_seconds()
     headers = {"Authorization": f"Bearer {token}"}
     url = f"{OPENAI_API_BASE}/videos/{video_id}"
 
     while True:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("OpenAI video generation timed out while waiting for the provider.")
         try:
             video = request_json("GET", url, headers=headers)
         except RuntimeError as exc:

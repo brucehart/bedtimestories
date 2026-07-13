@@ -1,6 +1,7 @@
 // Cloudflare Worker used to store and manage short bedtime stories.
 import { Env } from './types';
 import { fetchHandler } from './routes';
+import { maintainAgentJobs } from './agent';
 export { signSession, verifySession, SESSION_MAXAGE } from './session';
 
 const UPDATE_CACHE_BASE = 'https://bedtimestories.bruce-hart.workers.dev';
@@ -36,6 +37,11 @@ export default {
                     console.error('scheduled update-cache failed', err);
                 }
             })()
+        );
+        ctx.waitUntil(
+            maintainAgentJobs(env).catch(err => {
+                console.error('scheduled story-agent maintenance failed', err);
+            })
         );
     },
 

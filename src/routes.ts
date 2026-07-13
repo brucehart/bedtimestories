@@ -1,8 +1,8 @@
 import { AuthInfo, Env, Route, Story } from './types';
 import { markdownToHtml, easternNowIso, htmlToPlainText } from './utils';
-import { signSession, signState, verifyState, verifySession, SESSION_MAXAGE } from './session';
+import { signSession, signState, verifyState, SESSION_MAXAGE } from './session';
 import { verifyGoogleToken, getAccountRole, requireAuth } from './auth';
-import { timingSafeEqualString } from './security';
+import { bearerToken, timingSafeEqualString } from './security';
 import {
     cancelAgentJob,
     createAgentJob,
@@ -36,6 +36,10 @@ const MEDIA_KEY_RE = /^[A-Za-z0-9._-]+$/;
 const MAX_QUERY_LENGTH = 200;
 const MAX_TITLE_LENGTH = 200;
 const MAX_CONTENT_LENGTH = 50_000;
+const MAX_JSON_BODY_BYTES = 64 * 1024;
+const MULTIPART_OVERHEAD_BYTES = 1024 * 1024;
+const MAX_MEDIA_REQUEST_BYTES = MAX_VIDEO_BYTES + MULTIPART_OVERHEAD_BYTES;
+const MAX_STORY_FORM_REQUEST_BYTES = MAX_IMAGE_BYTES + MAX_VIDEO_BYTES + MULTIPART_OVERHEAD_BYTES;
 
 const CONTENT_TYPE_EXTENSION: Record<string, string> = {
     'image/jpeg': '.jpg',
@@ -70,13 +74,13 @@ function buildConditionalHeaders(request: Request): Headers | undefined {
     return any ? headers : undefined;
 }
 
-function requireStoryToken(request: Request, env: Env): Response | null {
+async function requireStoryToken(request: Request, env: Env): Promise<Response | null> {
     const requiredToken = env.STORY_API_TOKEN;
     if (!requiredToken) {
         return new Response('Story API token not configured', { status: 503 });
     }
     const providedToken = request.headers.get(STORY_TOKEN_HEADER);
-    if (!providedToken || !timingSafeEqualString(providedToken, requiredToken)) {
+    if (!providedToken || !(await timingSafeEqualString(providedToken, requiredToken))) {
         return new Response('Unauthorized', { status: 401 });
     }
     return null;
@@ -97,10 +101,11 @@ function applyHtmlSecurityHeaders(headers: Headers, options?: { cacheNoStore?: b
     headers.set('X-Frame-Options', 'DENY');
     headers.set('Referrer-Policy', 'no-referrer');
     headers.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
-    // Keep inline scripts working; only lock down embedding/object/base behavior.
     headers.set(
         'Content-Security-Policy',
-        "frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; " +
+        "font-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
     );
     if (options?.cacheNoStore) {
         headers.set('Cache-Control', 'no-store');
@@ -110,6 +115,85 @@ function applyHtmlSecurityHeaders(headers: Headers, options?: { cacheNoStore?: b
 function applyNoStoreNoReferrer(headers: Headers) {
     headers.set('Cache-Control', 'no-store');
     headers.set('Referrer-Policy', 'no-referrer');
+}
+
+async function readBodyWithLimit(request: Request, maxBytes: number): Promise<Uint8Array> {
+    const rawLength = request.headers.get('Content-Length');
+    if (rawLength !== null) {
+        const contentLength = Number(rawLength);
+        if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+            throw new TypeError('Invalid Content-Length');
+        }
+        if (contentLength > maxBytes) throw new RangeError('Payload Too Large');
+    }
+    if (!request.body) return new Uint8Array();
+
+    const reader = request.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (!value) continue;
+            total += value.byteLength;
+            if (total > maxBytes) throw new RangeError('Payload Too Large');
+            chunks.push(value);
+        }
+    } finally {
+        await reader.cancel().catch(() => undefined);
+    }
+
+    const body = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+        body.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+    return body;
+}
+
+async function parseJsonObject(request: Request): Promise<Record<string, unknown> | Response> {
+    try {
+        const body = await readBodyWithLimit(request, MAX_JSON_BODY_BYTES);
+        const value: unknown = JSON.parse(new TextDecoder().decode(body));
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return new Response('Invalid JSON payload', { status: 400 });
+        }
+        return value as Record<string, unknown>;
+    } catch (error) {
+        if (error instanceof RangeError) return new Response('Payload Too Large', { status: 413 });
+        return new Response('Invalid JSON payload', { status: 400 });
+    }
+}
+
+async function parseFormDataWithLimit(request: Request, maxBytes: number): Promise<FormData | Response> {
+    const rawLength = request.headers.get('Content-Length');
+    if (rawLength !== null) {
+        const contentLength = Number(rawLength);
+        if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+            return new Response('Invalid Content-Length', { status: 400 });
+        }
+        if (contentLength > maxBytes) return new Response('Payload Too Large', { status: 413 });
+        try {
+            return await request.formData();
+        } catch {
+            return new Response('Invalid multipart form data', { status: 400 });
+        }
+    }
+
+    try {
+        const body = await readBodyWithLimit(request, maxBytes);
+        const boundedRequest = new Request(request.url, {
+            method: request.method,
+            headers: request.headers,
+            body
+        });
+        return await boundedRequest.formData();
+    } catch (error) {
+        if (error instanceof RangeError) return new Response('Payload Too Large', { status: 413 });
+        return new Response('Invalid multipart form data', { status: 400 });
+    }
 }
 
 type UploadKind = 'image' | 'video' | 'either';
@@ -194,8 +278,8 @@ const preAuthRoutes: Route[] = [
         handler: async (request, env, _ctx, _match, url) => {
             const requiredToken = env.CACHE_REFRESH_TOKEN;
             if (!requiredToken) return new Response('Cache refresh token not configured', { status: 503 });
-            const authHeader = request.headers.get('Authorization');
-            if (authHeader !== `Bearer ${requiredToken}`) {
+            const providedToken = bearerToken(request);
+            if (!providedToken || !(await timingSafeEqualString(providedToken, requiredToken))) {
                 return new Response('Forbidden', { status: 403 });
             }
             const daysParam = url.searchParams.get('days');
@@ -227,7 +311,7 @@ const preAuthRoutes: Route[] = [
         method: 'GET',
         pattern: /^\/api\/stories\/calendar$/,
         handler: async (request, env) => {
-            const authError = requireStoryToken(request, env);
+            const authError = await requireStoryToken(request, env);
             if (authError) return authError;
             try {
                 const url = new URL(request.url);
@@ -267,12 +351,13 @@ const preAuthRoutes: Route[] = [
         method: 'POST',
         pattern: /^\/api\/media$/,
         handler: async (request, env) => {
-            const authError = requireStoryToken(request, env);
+            const authError = await requireStoryToken(request, env);
             if (authError) return authError;
             if (!request.headers.get('content-type')?.includes('multipart/form-data')) {
                 return new Response('Expected multipart/form-data', { status: 400 });
             }
-            const data = await request.formData();
+            const data = await parseFormDataWithLimit(request, MAX_MEDIA_REQUEST_BYTES);
+            if (data instanceof Response) return data;
             const file = data.get('file');
             if (!(file instanceof File)) {
                 return new Response('Missing file', { status: 400 });
@@ -289,15 +374,13 @@ const preAuthRoutes: Route[] = [
         method: 'POST',
         pattern: /^\/api\/stories$/,
         handler: async (request, env) => {
-            const authError = requireStoryToken(request, env);
+            const authError = await requireStoryToken(request, env);
             if (authError) return authError;
             if (!request.headers.get('content-type')?.includes('application/json')) {
                 return new Response('Expected application/json', { status: 400 });
             }
-            const payload = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-            if (!payload || typeof payload !== 'object') {
-                return new Response('Invalid JSON payload', { status: 400 });
-            }
+            const payload = await parseJsonObject(request);
+            if (payload instanceof Response) return payload;
             const title = payload.title;
             const contentMd = payload.content;
             const dateStr = payload.date;
@@ -311,10 +394,19 @@ const preAuthRoutes: Route[] = [
             if (!trimmedTitle || !trimmedContent) {
                 return new Response('Missing title or content', { status: 400 });
             }
+            if (trimmedTitle.length > MAX_TITLE_LENGTH) {
+                return new Response('Title too long', { status: 400 });
+            }
+            if (trimmedContent.length > MAX_CONTENT_LENGTH) {
+                return new Response('Content too long', { status: 400 });
+            }
             const contentHtml = markdownToHtml(trimmedContent);
             const dateIso = normalizeStoryDate(typeof dateStr === 'string' ? dateStr : undefined);
             const imageKey = typeof imageUrl === 'string' && imageUrl.trim() ? imageUrl.trim() : null;
             const videoKey = typeof videoUrl === 'string' && videoUrl.trim() ? videoUrl.trim() : null;
+            if ((imageKey && !validateMediaKey(imageKey)) || (videoKey && !validateMediaKey(videoKey))) {
+                return new Response('Invalid media key', { status: 400 });
+            }
             try {
                 const stmt = env.DB.prepare(
                     'INSERT INTO stories (title, content, date, image_url, video_url, created, updated) VALUES (?1, ?2, ?3, ?4, ?5, datetime(\'now\'), datetime(\'now\'))'
@@ -330,7 +422,7 @@ const preAuthRoutes: Route[] = [
         method: 'PUT',
         pattern: /^\/api\/stories\/(\d+)$/,
         handler: async (request, env, _ctx, match) => {
-            const authError = requireStoryToken(request, env);
+            const authError = await requireStoryToken(request, env);
             if (authError) return authError;
             if (!request.headers.get('content-type')?.includes('application/json')) {
                 return new Response('Expected application/json', { status: 400 });
@@ -339,10 +431,8 @@ const preAuthRoutes: Route[] = [
             if (!Number.isInteger(id)) {
                 return new Response('Invalid story id', { status: 400 });
             }
-            const payload = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-            if (!payload || typeof payload !== 'object') {
-                return new Response('Invalid JSON payload', { status: 400 });
-            }
+            const payload = await parseJsonObject(request);
+            if (payload instanceof Response) return payload;
             const existing = await env.DB.prepare('SELECT * FROM stories WHERE id = ?1').bind(id).first<Story>();
             if (!existing) {
                 return new Response('Not Found', { status: 404 });
@@ -355,12 +445,14 @@ const preAuthRoutes: Route[] = [
                 if (typeof payload.title !== 'string') return new Response('Invalid title', { status: 400 });
                 const trimmed = payload.title.trim();
                 if (!trimmed) return new Response('Missing title', { status: 400 });
+                if (trimmed.length > MAX_TITLE_LENGTH) return new Response('Title too long', { status: 400 });
                 updates.push({ field: 'title', value: trimmed });
             }
             if ('content' in payload) {
                 if (typeof payload.content !== 'string') return new Response('Invalid content', { status: 400 });
                 const trimmed = payload.content.trim();
                 if (!trimmed) return new Response('Missing content', { status: 400 });
+                if (trimmed.length > MAX_CONTENT_LENGTH) return new Response('Content too long', { status: 400 });
                 updates.push({ field: 'content', value: markdownToHtml(trimmed) });
             }
             if ('date' in payload) {
@@ -373,6 +465,9 @@ const preAuthRoutes: Route[] = [
                 }
                 const trimmed = typeof payload.image_url === 'string' ? payload.image_url.trim() : '';
                 nextImageUrl = trimmed ? trimmed : null;
+                if (nextImageUrl && !validateMediaKey(nextImageUrl)) {
+                    return new Response('Invalid image_url', { status: 400 });
+                }
                 updates.push({ field: 'image_url', value: nextImageUrl });
             }
             if ('video_url' in payload) {
@@ -381,6 +476,9 @@ const preAuthRoutes: Route[] = [
                 }
                 const trimmed = typeof payload.video_url === 'string' ? payload.video_url.trim() : '';
                 nextVideoUrl = trimmed ? trimmed : null;
+                if (nextVideoUrl && !validateMediaKey(nextVideoUrl)) {
+                    return new Response('Invalid video_url', { status: 400 });
+                }
                 updates.push({ field: 'video_url', value: nextVideoUrl });
             }
 
@@ -478,21 +576,6 @@ const preAuthRoutes: Route[] = [
         method: 'GET',
         pattern: /^\/oauth\/callback$/,
         handler: async (_request, env, _ctx, _match, url) => {
-            const tokenParam = url.searchParams.get('token');
-            if (tokenParam) {
-                const email = await verifySession(tokenParam, env);
-                if (!email) return new Response('Invalid token', { status: 400 });
-                const headers = new Headers({
-                    Location: '/',
-                    'Set-Cookie': `session=${tokenParam}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_MAXAGE}`
-                });
-                applyNoStoreNoReferrer(headers);
-                return new Response(null, {
-                    status: 302,
-                    headers
-                });
-            }
-
             const code = url.searchParams.get('code');
             if (!code) return new Response('Missing code', { status: 400 });
             const state = url.searchParams.get('state');
@@ -534,6 +617,23 @@ const preAuthRoutes: Route[] = [
 
 // Authenticated API and asset routes
 const routes: Route[] = [
+    {
+        method: 'GET',
+        pattern: /^\/(?:assets|vendor)\/[A-Za-z0-9._-]+\.js$/,
+        handler: async (request, env) => {
+            const res = await env.ASSETS.fetch(request);
+            const headers = new Headers(res.headers);
+            headers.set('X-Content-Type-Options', 'nosniff');
+            headers.set('Cross-Origin-Resource-Policy', 'same-origin');
+            headers.set(
+                'Cache-Control',
+                new URL(request.url).pathname.startsWith('/vendor/')
+                    ? 'public, max-age=31536000, immutable'
+                    : 'no-cache'
+            );
+            return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+        }
+    },
     {
         method: 'GET',
         pattern: /^\/(?:|index\.html)$/,
@@ -890,7 +990,8 @@ const routes: Route[] = [
             if (!request.headers.get('content-type')?.includes('multipart/form-data')) {
                 return new Response('Expected multipart/form-data', { status: 400 });
             }
-            const data = await request.formData();
+            const data = await parseFormDataWithLimit(request, MAX_STORY_FORM_REQUEST_BYTES);
+            if (data instanceof Response) return data;
             const title = data.get('title');
             const contentMd = data.get('content');
             const dateStr = data.get('date');
@@ -957,7 +1058,8 @@ const routes: Route[] = [
             if (!request.headers.get('content-type')?.includes('multipart/form-data')) {
                 return new Response('Expected multipart/form-data', { status: 400 });
             }
-            const data = await request.formData();
+            const data = await parseFormDataWithLimit(request, MAX_STORY_FORM_REQUEST_BYTES);
+            if (data instanceof Response) return data;
             const title = data.get('title');
             const contentMd = data.get('content');
             const dateStr = data.get('date');

@@ -17,6 +17,9 @@ DEFAULT_STORY_API_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
+DEFAULT_HTTP_TIMEOUT_SECONDS = 60
+MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
+MAX_JSON_RESPONSE_BYTES = 1024 * 1024
 
 
 def parse_env_value(raw: str) -> str:
@@ -96,11 +99,14 @@ def request_json(
 
     req = urllib.request.Request(url=url, method=method, headers=final_headers, data=data)
     try:
-        with urllib.request.urlopen(req) as resp:
-            body = resp.read().decode("utf-8")
+        with urllib.request.urlopen(req, timeout=DEFAULT_HTTP_TIMEOUT_SECONDS) as resp:
+            body_bytes = resp.read(MAX_JSON_RESPONSE_BYTES + 1)
+            if len(body_bytes) > MAX_JSON_RESPONSE_BYTES:
+                raise RuntimeError("API JSON response exceeded the 1 MB limit.")
+            body = body_bytes.decode("utf-8")
             return json.loads(body)
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
+        body = exc.read(2001).decode("utf-8", errors="replace")
         raise RuntimeError(f"API error {exc.code}: {body[:2000]}") from exc
 
 
@@ -171,12 +177,32 @@ def download_file(
     allowed_suffixes: set[str] | None = None,
 ) -> str:
     req = urllib.request.Request(url=url, method="GET", headers=headers or {})
-    with urllib.request.urlopen(req) as resp:
-        data = resp.read()
+    with urllib.request.urlopen(req, timeout=DEFAULT_HTTP_TIMEOUT_SECONDS) as resp:
         response_headers = {k: v for k, v in resp.headers.items()}
+        raw_length = response_headers.get("Content-Length", "")
+        if raw_length.isdigit() and int(raw_length) > MAX_DOWNLOAD_BYTES:
+            raise RuntimeError("Provider download exceeded the 100 MB limit.")
+
+        output_path = f"/tmp/{prefix}-{uuid.uuid4().hex}"
+        total = 0
+        try:
+            with open(output_path, "wb") as f:
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_DOWNLOAD_BYTES:
+                        raise RuntimeError("Provider download exceeded the 100 MB limit.")
+                    f.write(chunk)
+        except Exception:
+            try:
+                pathlib.Path(output_path).unlink()
+            except OSError:
+                pass
+            raise
 
     ext = guess_extension(url, response_headers, default_ext, allowed_suffixes)
-    output_path = f"/tmp/{prefix}-{uuid.uuid4().hex}{ext}"
-    with open(output_path, "wb") as f:
-        f.write(data)
-    return output_path
+    final_path = output_path + ext
+    pathlib.Path(output_path).replace(final_path)
+    return final_path

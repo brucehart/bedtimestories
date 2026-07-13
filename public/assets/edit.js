@@ -1,0 +1,253 @@
+const { useState, useEffect, useRef } = React;
+
+        async function authFetch(url, options) {
+            try {
+                const res = await fetch(url, options);
+                if (res.redirected && new URL(res.url).pathname === '/login') {
+                    window.location.href = '/login';
+                    throw new Error('Redirecting to login');
+                }
+                if (res.status === 401 || res.status === 403) {
+                    window.location.href = '/login';
+                    throw new Error('Unauthorized');
+                }
+                return res;
+            } catch (err) {
+                window.location.href = '/login';
+                throw err;
+            }
+        }
+        function App() {
+            const params = new URLSearchParams(window.location.search);
+            const id = params.get('id');
+            const [title, setTitle] = useState('');
+            const [content, setContent] = useState('');
+            const [date, setDate] = useState('');
+            const [imageFile, setImageFile] = useState(null);
+            const [videoFile, setVideoFile] = useState(null);
+            const [preview, setPreview] = useState(null);
+            const [videoPreview, setVideoPreview] = useState(null);
+            const fileInput = useRef(null);
+            const contentRef = useRef(null);
+            const calendarWrapRef = useRef(null);
+
+            // Calendar dropdown state
+            const [calendarOpen, setCalendarOpen] = useState(false);
+
+            // Calendar state (default to current month/year until date loads)
+            const [month, setMonth] = useState(() => new Date().getMonth());
+            const [year, setYear] = useState(() => new Date().getFullYear());
+            const [daysWithStories, setDaysWithStories] = useState(new Set());
+
+            const pad2 = n => String(n).padStart(2, '0');
+            const ymd = (y, m, d) => `${y}-${pad2(m+1)}-${pad2(d)}`;
+
+            const fetchMonthData = async (y, m) => {
+                const start = ymd(y, m, 1);
+                const last = new Date(y, m + 1, 0).getDate();
+                const end = ymd(y, m, last);
+                const res = await authFetch(`/stories/calendar?start=${start}&end=${end}`);
+                if (!res.ok) return setDaysWithStories(new Set());
+                const data = await res.json();
+                setDaysWithStories(new Set((data.days || []).map(d => d.day)));
+            };
+
+            useEffect(() => { fetchMonthData(year, month); }, [year, month]);
+
+            // Keep month/year in sync with selected date once loaded
+            useEffect(() => {
+                const d = new Date(date);
+                if (!isNaN(d)) {
+                    const y = d.getFullYear();
+                    const m = d.getMonth();
+                    if (y !== year || m !== month) { setYear(y); setMonth(m); }
+                }
+            }, [date]);
+
+            // Close calendar when clicking outside
+            useEffect(() => {
+                if (!calendarOpen) return;
+                const onDocClick = (e) => {
+                    if (!calendarWrapRef.current) return;
+                    if (!calendarWrapRef.current.contains(e.target)) {
+                        setCalendarOpen(false);
+                    }
+                };
+                document.addEventListener('mousedown', onDocClick);
+                return () => document.removeEventListener('mousedown', onDocClick);
+            }, [calendarOpen]);
+
+            const htmlToText = html => {
+                const div = document.createElement('div');
+                div.innerHTML = html || '';
+                return (div.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+            };
+
+            useEffect(() => {
+                authFetch('/stories/' + id)
+                    .then(res => res.json())
+                    .then(data => {
+                        setTitle(data.title);
+                        const contentText = typeof data.content_text === 'string' ? data.content_text : htmlToText(data.content);
+                        setContent(contentText);
+                        setDate(new Date(data.date).toISOString().substring(0, 10));
+                        setPreview(data.image_url ? '/images/' + data.image_url : null);
+                        setVideoPreview(data.video_url ? '/images/' + data.video_url : null);
+                    });
+            }, [id]);
+
+            const handleFile = file => {
+                if (file) {
+                    if (file.type.startsWith('video/')) {
+                        setVideoFile(file);
+                        setVideoPreview(URL.createObjectURL(file));
+                    } else {
+                        setImageFile(file);
+                        setPreview(URL.createObjectURL(file));
+                    }
+                }
+            };
+
+            const onPaste = e => {
+                const file = e.clipboardData.files && e.clipboardData.files[0];
+                if (file) {
+                    e.preventDefault();
+                    handleFile(file);
+                    return;
+                }
+
+                if (e.target && e.target.tagName === 'TEXTAREA') {
+                    const pastedText = e.clipboardData.getData('text');
+                    if (!pastedText) return;
+
+                    const normalized = pastedText.replace(/\r\n/g, '\n');
+                    const withoutLeading = normalized.replace(/^\s*/, '');
+                    if (!withoutLeading.startsWith('Title:')) return;
+
+                    const newlineIndex = withoutLeading.indexOf('\n');
+                    const titleLine = newlineIndex === -1 ? withoutLeading : withoutLeading.slice(0, newlineIndex);
+                    const extractedTitle = titleLine.slice('Title:'.length).trim();
+                    const remainder = newlineIndex === -1 ? '' : withoutLeading.slice(newlineIndex + 1);
+                    const cleanedContent = remainder.replace(/^\s+/, '');
+
+                    const target = e.target;
+                    const { selectionStart, selectionEnd, value: currentValue } = target;
+                    const before = currentValue.slice(0, selectionStart);
+                    const after = currentValue.slice(selectionEnd);
+                    const nextValue = before + cleanedContent + after;
+
+                    e.preventDefault();
+                    setTitle(extractedTitle);
+                    setContent(nextValue);
+
+                    requestAnimationFrame(() => {
+                        if (contentRef.current) {
+                            const cursor = before.length + cleanedContent.length;
+                            contentRef.current.setSelectionRange(cursor, cursor);
+                        }
+                    });
+                }
+            };
+
+            const onDrop = e => {
+                e.preventDefault();
+                handleFile(e.dataTransfer.files[0]);
+            };
+
+            const onDragOver = e => e.preventDefault();
+
+            const submit = async e => {
+                e.preventDefault();
+                const fd = new FormData();
+                fd.append('title', title);
+                fd.append('content', content);
+                fd.append('date', date);
+                if (imageFile) fd.append('image', imageFile, imageFile.name);
+                if (videoFile) fd.append('video', videoFile, videoFile.name);
+                const res = await authFetch('/stories/' + id, { method: 'PUT', body: fd });
+                if (res.ok) {
+                    alert('Story saved');
+                    window.location.href = '/manage.html';
+                } else {
+                    alert('Failed to save');
+                }
+            };
+
+            // Simple calendar component (month view)
+            const Calendar = () => {
+                const first = new Date(year, month, 1);
+                const firstWeekday = first.getDay(); // 0=Sun
+                const daysInMonth = new Date(year, month + 1, 0).getDate();
+                const cells = [];
+                for (let i = 0; i < firstWeekday; i++) cells.push(null);
+                for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+                const onPrev = () => {
+                    const d = new Date(year, month, 1); d.setMonth(d.getMonth() - 1);
+                    setYear(d.getFullYear()); setMonth(d.getMonth());
+                };
+                const onNext = () => {
+                    const d = new Date(year, month, 1); d.setMonth(d.getMonth() + 1);
+                    setYear(d.getFullYear()); setMonth(d.getMonth());
+                };
+                const onPick = (d) => {
+                    if (!d) return;
+                    const v = ymd(year, month, d);
+                    setDate(v);
+                    setCalendarOpen(false);
+                };
+                return React.createElement('div', { className: 'calendar', style: { background: 'white', border: '1px solid #ddd', borderRadius: '8px', padding: '8px', boxShadow: '0 6px 24px rgba(0,0,0,0.12)', width: '280px' } }, [
+                    React.createElement('div', { key: 'hdr', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '0.5rem' } }, [
+                        React.createElement('button', { key: 'p', type: 'button', onClick: onPrev }, '←'),
+                        React.createElement('strong', { key: 'm' }, `${new Date(year, month, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' })}`),
+                        React.createElement('button', { key: 'n', type: 'button', onClick: onNext }, '→')
+                    ]),
+                    React.createElement('div', { key: 'dow', className: 'calendar-grid', style: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginTop: '0.25rem' } },
+                        ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => React.createElement('div', { key: d, style: { textAlign: 'center', fontSize: '0.8rem', color: '#666' } }, d))
+                    ),
+                    React.createElement('div', { key: 'grid', className: 'calendar-grid', style: { display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px' } },
+                        cells.map((d, i) => {
+                            const isStory = d ? daysWithStories.has(ymd(year, month, d)) : false;
+                            const isSelected = d && ymd(year, month, d) === date;
+                            const style = {
+                                padding: '0.5rem', textAlign: 'center', borderRadius: '6px', cursor: d ? 'pointer' : 'default',
+                                background: isSelected ? '#eef6ff' : 'transparent',
+                                fontWeight: isStory ? '700' : '400',
+                                color: isStory ? '#0a7d00' : '#222',
+                                border: '1px solid #ddd',
+                                opacity: d ? 1 : 0
+                            };
+                            return React.createElement('div', { key: i, style, onClick: () => onPick(d) }, d ? String(d) : '');
+                        })
+                    )
+                ]);
+            };
+
+            return React.createElement('form', { onSubmit: submit, onPaste, onDrop, onDragOver }, [
+                React.createElement('div', { key: 'hdr', className: 'title-row' }, [
+                    React.createElement('h1', { key: 'h' }, 'Edit Story'),
+                    React.createElement('a', { key: 'link', href: '/manage', className: 'title-link' }, 'Manage Stories')
+                ]),
+                React.createElement('input', { key: 't', type: 'text', placeholder: 'Title', value: title, required: true, onChange: e => setTitle(e.target.value) }),
+                React.createElement('div', { key: 'datewrap', ref: calendarWrapRef, style: { position: 'relative' } }, [
+                    React.createElement('input', {
+                        key: 'd',
+                        type: 'text',
+                        value: date,
+                        required: true,
+                        readOnly: true,
+                        placeholder: 'YYYY-MM-DD',
+                        onClick: () => setCalendarOpen(true),
+                        onFocus: () => setCalendarOpen(true)
+                    }),
+                    calendarOpen ? React.createElement('div', { key: 'popover', style: { position: 'absolute', top: '110%', left: 0, zIndex: 1000 } }, React.createElement(Calendar)) : null
+                ]),
+                React.createElement('textarea', { key: 'c', rows: 10, placeholder: 'Story text (no title)', value: content, required: true, onChange: e => setContent(e.target.value), ref: contentRef }),
+                React.createElement('div', { key: 'dz', className: 'drop-zone', onClick: () => fileInput.current && fileInput.current.click() }, imageFile || videoFile ? 'Change file' : 'Click, paste or drop image or video here'),
+                React.createElement('input', { key: 'f', type: 'file', accept: 'image/*,video/mp4', style: { display: 'none' }, ref: fileInput, onChange: e => handleFile(e.target.files[0]) }),
+                preview ? React.createElement('img', { key: 'p', src: preview }) : null,
+                videoPreview ? React.createElement('video', { key: 'vp', src: videoPreview, controls: true, style: { maxWidth: '100%' } }) : null,
+                React.createElement('button', { key: 'b', type: 'submit' }, 'Save')
+            ]);
+        }
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
