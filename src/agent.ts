@@ -28,6 +28,7 @@ const MAX_AGENT_TERMINAL_EVENT_RESERVE = 50;
 const MAX_AGENT_MESSAGES = 100;
 const MAX_ACTIVE_JOBS_PER_USER = 1;
 const MAX_JOBS_PER_USER_PER_HOUR = 5;
+const SPRITE_REQUEST_TIMEOUT_MS = 30 * 1000;
 const CALLBACK_TOKEN_TTL_MS = 60 * 60 * 1000;
 const JOB_RETENTION_DAYS = 7;
 
@@ -314,9 +315,13 @@ async function getJobForCallback(env: Env, request: Request, jobId: string): Pro
     const expiresAt = row.callback_token_expires ? Date.parse(row.callback_token_expires) : Number.NaN;
     if (TERMINAL_STATUS.has(row.status) || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
         if (!TERMINAL_STATUS.has(row.status)) {
-            await updateJobStatus(env, jobId, 'failed', { error: 'Story agent job exceeded its maximum duration.' });
-            await appendAgentEvent(env, jobId, 'failed', 'Story agent job expired.');
-            await cancelSpriteJob(env, jobId).catch(() => undefined);
+            const changed = await updateJobStatus(env, jobId, 'failed', {
+                error: 'Story agent job exceeded its maximum duration.'
+            });
+            if (changed) {
+                await appendAgentEvent(env, jobId, 'failed', 'Story agent job expired.', undefined, true);
+                await cancelSpriteJob(env, jobId).catch(() => undefined);
+            }
         }
         return new Response('Unauthorized', { status: 401 });
     }
@@ -328,12 +333,13 @@ async function appendAgentEvent(
     jobId: string,
     eventType: string,
     message: string,
-    metadata?: unknown
+    metadata?: unknown,
+    useTerminalReserve = false
 ) {
     const safeEventType = sanitizeEventType(eventType);
     const safeMessage = message.slice(0, MAX_AGENT_EVENT_MESSAGE_LENGTH);
     const metadataJson = metadata === undefined ? null : JSON.stringify(metadata).slice(0, 12000);
-    const eventLimit = TERMINAL_STATUS.has(safeEventType)
+    const eventLimit = useTerminalReserve
         ? MAX_AGENT_EVENTS
         : MAX_AGENT_EVENTS - MAX_AGENT_TERMINAL_EVENT_RESERVE;
     await env.DB.prepare(
@@ -391,9 +397,13 @@ async function updateJobStatus(
         setParts.push(`sprite_session_id = ?${values.length}`);
     }
     values.push(jobId);
-    await env.DB.prepare(`UPDATE story_agent_jobs SET ${setParts.join(', ')} WHERE id = ?${values.length}`)
+    const result = await env.DB.prepare(
+        `UPDATE story_agent_jobs SET ${setParts.join(', ')} WHERE id = ?${values.length} ` +
+        "AND status NOT IN ('complete', 'failed', 'canceled')"
+    )
         .bind(...values)
         .run();
+    return result.meta.changes > 0;
 }
 
 async function launchSpriteJob(env: Env, origin: string, jobId: string, callbackToken: string) {
@@ -402,7 +412,7 @@ async function launchSpriteJob(env: Env, origin: string, jobId: string, callback
         throw new Error('SPRITES_API_TOKEN is not configured');
     }
 
-    await updateJobStatus(env, jobId, 'starting');
+    if (!(await updateJobStatus(env, jobId, 'starting'))) return;
     await appendAgentEvent(env, jobId, 'status', `Starting Sprite ${config.spriteName}.`);
 
     const runnerPath = `/tmp/story-agent-${jobId}.py`;
@@ -465,7 +475,8 @@ async function launchSpriteJob(env: Env, origin: string, jobId: string, callback
         headers: {
             Authorization: `Bearer ${config.token}`,
             'User-Agent': SPRITE_RUNNER_USER_AGENT
-        }
+        },
+        signal: AbortSignal.timeout(SPRITE_REQUEST_TIMEOUT_MS)
     });
     if (!response.ok) {
         throw new Error(await spriteLaunchError(response));
@@ -493,7 +504,8 @@ async function cancelSpriteJob(env: Env, jobId: string) {
         headers: {
             Authorization: `Bearer ${config.token}`,
             'User-Agent': SPRITE_RUNNER_USER_AGENT
-        }
+        },
+        signal: AbortSignal.timeout(SPRITE_REQUEST_TIMEOUT_MS)
     });
 }
 
@@ -501,23 +513,25 @@ export async function maintainAgentJobs(env: Env): Promise<void> {
     const nowIso = new Date().toISOString();
     const { results: expiredJobs } = await env.DB.prepare(
         "SELECT id FROM story_agent_jobs WHERE status IN ('queued', 'starting', 'running') " +
-        'AND (callback_token_expires IS NULL OR callback_token_expires <= ?1) LIMIT 25'
+        'AND (callback_token_expires IS NULL OR datetime(callback_token_expires) <= datetime(?1)) LIMIT 25'
     )
         .bind(nowIso)
         .all<{ id: string }>();
 
     for (const job of expiredJobs) {
-        await updateJobStatus(env, job.id, 'failed', {
+        const changed = await updateJobStatus(env, job.id, 'failed', {
             error: 'Story agent job exceeded its maximum duration.'
         });
-        await appendAgentEvent(env, job.id, 'failed', 'Story agent job expired.');
-        await cancelSpriteJob(env, job.id).catch(() => undefined);
+        if (changed) {
+            await appendAgentEvent(env, job.id, 'failed', 'Story agent job expired.', undefined, true);
+            await cancelSpriteJob(env, job.id).catch(() => undefined);
+        }
     }
 
     const retentionCutoff = new Date(Date.now() - JOB_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const { results: purgeJobs } = await env.DB.prepare(
         "SELECT id FROM story_agent_jobs WHERE status IN ('complete', 'failed', 'canceled') " +
-        'AND COALESCE(completed, updated, created) <= ?1 LIMIT 25'
+        'AND datetime(COALESCE(completed, updated, created)) <= datetime(?1) LIMIT 25'
     )
         .bind(retentionCutoff)
         .all<{ id: string }>();
@@ -661,8 +675,10 @@ export async function createAgentJob(request: Request, env: Env, ctx: ExecutionC
         for (const key of uploadedRefKeys) {
             await env.IMAGES.delete(key).catch(() => undefined);
         }
-        await updateJobStatus(env, jobId, 'failed', { error: 'Reference image upload failed.' });
-        await appendAgentEvent(env, jobId, 'failed', 'Reference image upload failed.');
+        const changed = await updateJobStatus(env, jobId, 'failed', { error: 'Reference image upload failed.' });
+        if (changed) {
+            await appendAgentEvent(env, jobId, 'failed', 'Reference image upload failed.', undefined, true);
+        }
         return new Response('Reference image upload failed', { status: 500 });
     }
 
@@ -671,8 +687,10 @@ export async function createAgentJob(request: Request, env: Env, ctx: ExecutionC
     ctx.waitUntil(
         launchSpriteJob(env, origin, jobId, callbackToken).catch(async error => {
             const message = error instanceof Error ? error.message : 'Sprite launch failed';
-            await updateJobStatus(env, jobId, 'failed', { error: message });
-            await appendAgentEvent(env, jobId, 'failed', message);
+            const changed = await updateJobStatus(env, jobId, 'failed', { error: message });
+            if (changed) {
+                await appendAgentEvent(env, jobId, 'failed', message, undefined, true);
+            }
         })
     );
 
@@ -769,9 +787,11 @@ export async function cancelAgentJob(_request: Request, env: Env, ctx: Execution
     const row = await getAuthorizedJob(env, auth, jobId);
     if (row instanceof Response) return row;
     if (!TERMINAL_STATUS.has(row.status)) {
-        await updateJobStatus(env, jobId, 'canceled');
-        await appendAgentEvent(env, jobId, 'canceled', 'Job canceled from manage page.');
-        ctx.waitUntil(cancelSpriteJob(env, jobId).catch(() => undefined));
+        const changed = await updateJobStatus(env, jobId, 'canceled');
+        if (changed) {
+            await appendAgentEvent(env, jobId, 'canceled', 'Job canceled from manage page.', undefined, true);
+            ctx.waitUntil(cancelSpriteJob(env, jobId).catch(() => undefined));
+        }
     }
     return jsonResponse({ ok: true });
 }
@@ -868,10 +888,11 @@ export async function updateRunnerJob(request: Request, env: Env, jobId: string)
         : undefined;
     const title = typeof payload?.title === 'string' ? payload.title : undefined;
     const error = typeof payload?.error === 'string' ? payload.error : undefined;
-    await updateJobStatus(env, jobId, status as AgentStatus, { storyId, title, error });
+    const changed = await updateJobStatus(env, jobId, status as AgentStatus, { storyId, title, error });
+    if (!changed) return jsonResponse({ ok: true, ignored: true });
     await appendAgentEvent(env, jobId, status, `Job status changed to ${status}.`, {
         story_id: storyId,
         title
-    });
+    }, TERMINAL_STATUS.has(status));
     return jsonResponse({ ok: true });
 }

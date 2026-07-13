@@ -1,8 +1,8 @@
 import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeEach } from 'vitest';
-import worker, { signSession, verifySession, SESSION_MAXAGE } from '../src/index';
+import worker from '../src/index';
 import { getAccountRole, verifyGoogleToken } from '../src/auth';
-import { signState } from '../src/session';
+import { signSession, signState, verifySession, SESSION_MAXAGE } from '../src/session';
 import { sha256Hex, timingSafeEqualString } from '../src/security';
 import { STORY_AGENT_RUNNER } from '../src/storyAgentRunner';
 import { maintainAgentJobs } from '../src/agent';
@@ -292,6 +292,10 @@ function createDb(accounts: (string | Account)[], stories: Story[], agentState?:
                                 return { meta: { last_row_id: agentState.nextEventId - 1, changes: 1 } };
                             }
                             if (agentState && query.startsWith('INSERT INTO story_agent_messages')) {
+                                const messageCount = agentState.messages.filter(message => message.job_id === params[0]).length;
+                                if (messageCount >= params[3]) {
+                                    return { meta: { last_row_id: 0, changes: 0 } };
+                                }
                                 agentState.messages.push({
                                     id: agentState.nextMessageId++,
                                     job_id: params[0],
@@ -304,8 +308,14 @@ function createDb(accounts: (string | Account)[], stories: Story[], agentState?:
                             if (agentState && query.startsWith('UPDATE story_agent_jobs SET')) {
                                 const jobId = params[params.length - 1];
                                 const job = agentState.jobs.find(j => j.id === jobId);
-                                if (job) updateAgentJobFromQuery(query, params, job);
-                                return { meta: { last_row_id: 1 } };
+                                if (!job || (
+                                    query.includes("status NOT IN ('complete', 'failed', 'canceled')") &&
+                                    ['complete', 'failed', 'canceled'].includes(job.status)
+                                )) {
+                                    return { meta: { last_row_id: 0, changes: 0 } };
+                                }
+                                updateAgentJobFromQuery(query, params, job);
+                                return { meta: { last_row_id: 1, changes: 1 } };
                             }
                             if (agentState && query.startsWith('DELETE FROM story_agent_')) {
                                 const jobId = params[0];
@@ -1284,6 +1294,14 @@ describe('Story page', () => {
                 expect(response.status).toBe(200);
                 expect(agentState.events).toHaveLength(1950);
 
+                response = await workerFetch(`https://example.com/api/agent/jobs/${jobId}/events`, {
+                        method: 'POST',
+                        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ type: 'complete', message: 'premature terminal event' })
+                });
+                expect(response.status).toBe(200);
+                expect(agentState.events).toHaveLength(1950);
+
                 response = await workerFetch(`https://example.com/api/agent/jobs/${jobId}`, {
                         method: 'PATCH',
                         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -1292,6 +1310,33 @@ describe('Story page', () => {
                 expect(response.status).toBe(200);
                 expect(agentState.events).toHaveLength(1951);
                 expect(agentState.events.at(-1)?.event_type).toBe('complete');
+        });
+
+        it('rejects feedback after the per-job message quota is full', async () => {
+                const jobId = 'job_messagequota12345';
+                const agentState = createAgentState();
+                agentState.jobs.push(makeAgentJob({ id: jobId }));
+                agentState.messages = Array.from({ length: 100 }, (_, index) => ({
+                        id: index + 1,
+                        job_id: jobId,
+                        author_email: 'test@example.com',
+                        content: `message ${index + 1}`,
+                        created: new Date().toISOString()
+                }));
+                agentState.nextMessageId = 101;
+                env.DB = createDb(['test@example.com'], [], agentState);
+                env.STORY_AGENT_ALLOWED_EMAILS = 'test@example.com';
+                const jwt = await signSession('test@example.com', env);
+
+                const response = await workerFetch(`https://example.com/agent/jobs/${jobId}/messages`, {
+                        method: 'POST',
+                        headers: { cookie: `session=${jwt}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content: 'One message too many.' })
+                });
+
+                expect(response.status).toBe(429);
+                expect(agentState.messages).toHaveLength(100);
+                expect(agentState.events).toHaveLength(0);
         });
 
         it('expires and revokes stale runner callback credentials', async () => {
@@ -1431,6 +1476,82 @@ describe('Story page', () => {
                 expect(agentState.jobs[0].status).toBe('canceled');
                 expect(agentState.jobs[0].story_id).toBeNull();
                 expect(agentState.jobs[0].title).toBeNull();
+        });
+
+        it('does not let an in-flight runner update overwrite cancellation', async () => {
+                const token = 'runner-token';
+                const jobId = 'job_cancelrace123456';
+                const agentState = createAgentState();
+                agentState.jobs.push(makeAgentJob({
+                        id: jobId,
+                        callback_token_hash: await sha256Hex(token)
+                }));
+                const baseDb = createDb(['test@example.com'], [], agentState) as any;
+                let markRunnerUpdateStarted!: () => void;
+                const runnerUpdateStarted = new Promise<void>(resolve => {
+                        markRunnerUpdateStarted = resolve;
+                });
+                let releaseRunnerUpdate!: () => void;
+                const runnerUpdateRelease = new Promise<void>(resolve => {
+                        releaseRunnerUpdate = resolve;
+                });
+                env.DB = {
+                        ...baseDb,
+                        prepare(query: string) {
+                                const statement = baseDb.prepare(query);
+                                return {
+                                        ...statement,
+                                        bind(...params: any[]) {
+                                                const bound = statement.bind(...params);
+                                                if (query.startsWith('SELECT * FROM story_agent_jobs WHERE id = ?1')) {
+                                                        return {
+                                                                ...bound,
+                                                                async first<T>() {
+                                                                        const row = await bound.first<T>();
+                                                                        return row && typeof row === 'object' ? { ...row } as T : row;
+                                                                }
+                                                        };
+                                                }
+                                                if (query.startsWith('UPDATE story_agent_jobs SET') && params[0] === 'complete') {
+                                                        return {
+                                                                ...bound,
+                                                                async run() {
+                                                                        markRunnerUpdateStarted();
+                                                                        await runnerUpdateRelease;
+                                                                        return bound.run();
+                                                                }
+                                                        };
+                                                }
+                                                return bound;
+                                        }
+                                };
+                        }
+                } as D1Database;
+                env.STORY_AGENT_ALLOWED_EMAILS = 'test@example.com';
+                const jwt = await signSession('test@example.com', env);
+
+                const runnerResponsePromise = workerFetch(`https://example.com/api/agent/jobs/${jobId}`, {
+                        method: 'PATCH',
+                        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status: 'complete', story_id: 42, title: 'Too Late' })
+                });
+                await runnerUpdateStarted;
+
+                const cancelResponse = await workerFetch(`https://example.com/agent/jobs/${jobId}/cancel`, {
+                        method: 'POST',
+                        headers: { cookie: `session=${jwt}` }
+                });
+                expect(cancelResponse.status).toBe(200);
+                releaseRunnerUpdate();
+
+                const runnerResponse = await runnerResponsePromise;
+                expect(runnerResponse.status).toBe(200);
+                expect(await runnerResponse.json<any>()).toMatchObject({ ok: true, ignored: true });
+                expect(agentState.jobs[0].status).toBe('canceled');
+                expect(agentState.jobs[0].story_id).toBeNull();
+                expect(agentState.jobs[0].title).toBeNull();
+                expect(agentState.events.some(event => event.event_type === 'canceled')).toBe(true);
+                expect(agentState.events.some(event => event.event_type === 'complete')).toBe(false);
         });
 
         it('passes Sprite reference image paths into Codex and generate-story', () => {
