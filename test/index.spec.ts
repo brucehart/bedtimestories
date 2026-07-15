@@ -633,6 +633,44 @@ describe('Story page', () => {
                 expect(body).toContain('/assets/manage.js');
         });
 
+        it('fetches protected HTML assets by canonical path to avoid redirect loops', async () => {
+                const originalAssets = env.ASSETS;
+                const requestedPaths: string[] = [];
+                env.ASSETS = {
+                        async fetch(input: RequestInfo | URL, init?: RequestInit) {
+                                const assetRequest = new Request(input, init);
+                                const pathname = new URL(assetRequest.url).pathname;
+                                requestedPaths.push(pathname);
+                                if (pathname.endsWith('.html')) {
+                                        return new Response(null, {
+                                                status: 307,
+                                                headers: { Location: pathname.replace(/\.html$/, '') }
+                                        });
+                                }
+                                return originalAssets.fetch(assetRequest);
+                        }
+                } as Fetcher;
+
+                try {
+                        const jwt = await signSession('test@example.com', env);
+                        const pages = ['submit', 'manage', 'generate-story', 'edit'];
+                        for (const page of pages) {
+                                for (const suffix of ['', '/', '.html']) {
+                                        const response = await workerFetch(`https://example.com/${page}${suffix}`, {
+                                                headers: { cookie: `session=${jwt}` }
+                                        });
+                                        expect(response.status).toBe(200);
+                                        expect(response.headers.get('Location')).toBeNull();
+                                }
+                        }
+                        expect(requestedPaths).toEqual(
+                                pages.flatMap(page => Array(3).fill(`/${page}`))
+                        );
+                } finally {
+                        env.ASSETS = originalAssets;
+                }
+        });
+
         it('serves the Codex generation page', async () => {
                 const jwt = await signSession('test@example.com', env);
                 const response = await workerFetch('https://example.com/generate-story', { headers: { cookie: `session=${jwt}` } });

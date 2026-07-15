@@ -117,6 +117,14 @@ function applyNoStoreNoReferrer(headers: Headers) {
     headers.set('Referrer-Policy', 'no-referrer');
 }
 
+function buildCanonicalHtmlAssetRequest(request: Request, pathname: string): Request {
+    // The assets binding applies html_handling and redirects *.html to its
+    // extensionless canonical URL, so fetch the canonical path directly.
+    const url = new URL(request.url);
+    url.pathname = pathname;
+    return new Request(url, request);
+}
+
 async function readBodyWithLimit(request: Request, maxBytes: number): Promise<Uint8Array> {
     const rawLength = request.headers.get('Content-Length');
     if (rawLength !== null) {
@@ -737,7 +745,7 @@ const routes: Route[] = [
         pattern: /^\/submit(?:\.html|\/)?$/,
         handler: async (request, env, _ctx, _match, _url, auth) => {
             if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
-            const assetRequest = new Request(request.url.replace(/\/submit\/?$/, '/submit.html'), request);
+            const assetRequest = buildCanonicalHtmlAssetRequest(request, '/submit');
             const res = await env.ASSETS.fetch(assetRequest);
             const headers = new Headers(res.headers);
             applyHtmlSecurityHeaders(headers, { cacheNoStore: true });
@@ -749,7 +757,7 @@ const routes: Route[] = [
         pattern: /^\/manage(?:\.html|\/)?$/,
         handler: async (request, env, _ctx, _match, _url, auth) => {
             if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
-            const assetRequest = new Request(request.url.replace(/\/manage\/?$/, '/manage.html'), request);
+            const assetRequest = buildCanonicalHtmlAssetRequest(request, '/manage');
             const res = await env.ASSETS.fetch(assetRequest);
             const headers = new Headers(res.headers);
             applyHtmlSecurityHeaders(headers, { cacheNoStore: true });
@@ -761,7 +769,7 @@ const routes: Route[] = [
         pattern: /^\/generate-story(?:\.html|\/)?$/,
         handler: async (request, env, _ctx, _match, _url, auth) => {
             if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
-            const assetRequest = new Request(request.url.replace(/\/generate-story\/?$/, '/generate-story.html'), request);
+            const assetRequest = buildCanonicalHtmlAssetRequest(request, '/generate-story');
             const res = await env.ASSETS.fetch(assetRequest);
             const headers = new Headers(res.headers);
             applyHtmlSecurityHeaders(headers, { cacheNoStore: true });
@@ -773,7 +781,7 @@ const routes: Route[] = [
         pattern: /^\/edit(?:\.html|\/)?$/,
         handler: async (request, env, _ctx, _match, _url, auth) => {
             if (auth.role !== 'editor') return new Response('Forbidden', { status: 403 });
-            const assetRequest = new Request(request.url.replace(/\/edit\/?$/, '/edit.html'), request);
+            const assetRequest = buildCanonicalHtmlAssetRequest(request, '/edit');
             const res = await env.ASSETS.fetch(assetRequest);
             const headers = new Headers(res.headers);
             applyHtmlSecurityHeaders(headers, { cacheNoStore: true });
