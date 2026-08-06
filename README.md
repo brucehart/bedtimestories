@@ -145,6 +145,8 @@ Optional vars:
 - `STORY_AGENT_SPRITE_WORKDIR` – defaults to `/home/sprite/bedtimestories/main`.
 - `STORY_AGENT_SPRITES_API_BASE` – defaults to `https://api.sprites.dev`.
 - `STORY_AGENT_CODEX_HOME` – defaults to `/home/sprite/.codex-bedtimestories`.
+- `STORY_AGENT_CODEX_MODEL` – defaults to `gpt-5.6-luna`.
+- `STORY_AGENT_CODEX_REASONING_EFFORT` – defaults to `medium`.
 - `STORY_API_USER_AGENT` – browser-like user agent used by Sprite-side story API calls; override only if Cloudflare Browser Integrity Check starts blocking the default.
 
 Codex auth inside the Sprite is project-specific. Before first use, create fresh
@@ -172,9 +174,11 @@ automation API paths rather than disabling story-agent authentication.
 
 Agent admission is limited to one active job and five new jobs per account per
 hour. Each callback credential expires after one hour, runner execution stops
-after 50 minutes, provider polling and downloads are bounded, and terminal job
-records/reference images are deleted after seven days. Scheduled maintenance
-and authenticated job-list/create requests enforce expiry and retention.
+after 50 minutes, and Codex debug output is limited to 200 streamed lines of up
+to 2,000 characters each. Provider polling and downloads are bounded, and
+terminal job records/reference images are deleted after seven days. Scheduled
+maintenance and authenticated job-list/create requests enforce expiry and
+retention.
 
 ### Security Notes
 

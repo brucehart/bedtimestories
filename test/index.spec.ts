@@ -1074,6 +1074,10 @@ describe('Story page', () => {
                         expect(launchUrl.pathname).toBe('/v1/sprites/bedtime-stories/exec');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('story-agent-');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('STORY_AGENT_TASK_NAME=');
+                        expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('STORY_AGENT_CODEX_MODEL=');
+                        expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('gpt-5.6-luna');
+                        expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('STORY_AGENT_CODEX_REASONING_EFFORT=');
+                        expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('medium');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('CODEX_HOME=');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain('/home/sprite/.codex-bedtimestories');
                         expect(launchUrl.searchParams.getAll('cmd').join(' ')).toContain("printf '%s\\n'");
@@ -1616,6 +1620,10 @@ describe('Story page', () => {
                 expect(STORY_AGENT_RUNNER).not.toContain('stdin=subprocess.DEVNULL');
                 expect(STORY_AGENT_RUNNER).toContain('"exec"');
                 expect(STORY_AGENT_RUNNER).toContain('"--color"');
+                expect(STORY_AGENT_RUNNER).toContain('"--model"');
+                expect(STORY_AGENT_RUNNER).toContain('CODEX_MODEL = os.environ.get("STORY_AGENT_CODEX_MODEL", "gpt-5.6-luna")');
+                expect(STORY_AGENT_RUNNER).toContain('CODEX_REASONING_EFFORT = os.environ.get("STORY_AGENT_CODEX_REASONING_EFFORT", "medium")');
+                expect(STORY_AGENT_RUNNER).toContain('"model_reasoning_effort=" + json.dumps(CODEX_REASONING_EFFORT)');
                 expect(STORY_AGENT_RUNNER).toContain('"--output-last-message"');
                 expect(STORY_AGENT_RUNNER).not.toContain('"--no-alt-screen"');
                 expect(STORY_AGENT_RUNNER).toContain('STORY_AGENT_TASK_NAME');
@@ -1628,8 +1636,11 @@ describe('Story page', () => {
                 expect(STORY_AGENT_RUNNER).toContain('"User-Agent": USER_AGENT');
                 expect(STORY_AGENT_RUNNER).toContain('headers={"Authorization": "Bearer " + JOB_TOKEN, "User-Agent": USER_AGENT}');
                 expect(STORY_AGENT_RUNNER).toContain('MAX_RUNTIME_SECONDS = 50 * 60');
-                expect(STORY_AGENT_RUNNER).toContain('MAX_CAPTURE_CHARS = 2 * 1024 * 1024');
-                expect(STORY_AGENT_RUNNER).toContain('MAX_LOG_EVENTS = 1900');
+                expect(STORY_AGENT_RUNNER).toContain('MAX_CAPTURE_CHARS = 256 * 1024');
+                expect(STORY_AGENT_RUNNER).toContain('MAX_LOG_EVENTS = 200');
+                expect(STORY_AGENT_RUNNER).toContain('MAX_LOG_MESSAGE_CHARS = 2000');
+                expect(STORY_AGENT_RUNNER).toContain('truncate_log_message(clean)');
+                expect(STORY_AGENT_RUNNER).toContain('captured_output = (captured_output + text)[-MAX_CAPTURE_CHARS:]');
                 expect(STORY_AGENT_RUNNER).toContain('start_new_session=True');
                 expect(STORY_AGENT_RUNNER).toContain('os.killpg(proc.pid, signal.SIGKILL)');
                 expect(STORY_AGENT_RUNNER).not.toContain('result_path.read_text');

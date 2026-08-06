@@ -6,6 +6,8 @@ const DEFAULT_SPRITES_API_BASE = 'https://api.sprites.dev';
 const DEFAULT_SPRITE_NAME = 'bedtime-stories';
 const DEFAULT_SPRITE_WORKDIR = '/home/sprite/bedtimestories/main';
 const DEFAULT_CODEX_HOME = '/home/sprite/.codex-bedtimestories';
+const DEFAULT_CODEX_MODEL = 'gpt-5.6-luna';
+const DEFAULT_CODEX_REASONING_EFFORT = 'medium';
 
 // Cloudflare's Browser Integrity Check blocks the default curl/urllib
 // User-Agent with Error 1010 (browser_signature_banned). The Sprite runner and
@@ -362,7 +364,9 @@ function spriteConfig(env: Env) {
         token: env.SPRITES_API_TOKEN || env.SPRITE_API_TOKEN || '',
         spriteName: env.STORY_AGENT_SPRITE_NAME || DEFAULT_SPRITE_NAME,
         workdir: env.STORY_AGENT_SPRITE_WORKDIR || DEFAULT_SPRITE_WORKDIR,
-        codexHome: env.STORY_AGENT_CODEX_HOME || DEFAULT_CODEX_HOME
+        codexHome: env.STORY_AGENT_CODEX_HOME || DEFAULT_CODEX_HOME,
+        codexModel: env.STORY_AGENT_CODEX_MODEL || DEFAULT_CODEX_MODEL,
+        codexReasoningEffort: env.STORY_AGENT_CODEX_REASONING_EFFORT || DEFAULT_CODEX_REASONING_EFFORT
     };
 }
 
@@ -426,6 +430,8 @@ async function launchSpriteJob(env: Env, origin: string, jobId: string, callback
         `export STORY_AGENT_BASE_URL=${quoteShell(origin)}`,
         `export STORY_AGENT_WORKDIR=${quoteShell(config.workdir)}`,
         `export STORY_AGENT_TASK_NAME=${quoteShell(taskName)}`,
+        `export STORY_AGENT_CODEX_MODEL=${quoteShell(config.codexModel)}`,
+        `export STORY_AGENT_CODEX_REASONING_EFFORT=${quoteShell(config.codexReasoningEffort)}`,
         `export CODEX_HOME=${quoteShell(config.codexHome)}`,
         'export PYTHONUNBUFFERED=1'
     ];

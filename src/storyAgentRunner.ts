@@ -22,6 +22,8 @@ JOB_ID = os.environ["STORY_AGENT_JOB_ID"]
 JOB_TOKEN = os.environ["STORY_AGENT_TOKEN"]
 WORKDIR = os.environ.get("STORY_AGENT_WORKDIR", "/home/sprite/bedtimestories/main")
 DEFAULT_CODEX_HOME = "/home/sprite/.codex-bedtimestories"
+CODEX_MODEL = os.environ.get("STORY_AGENT_CODEX_MODEL", "gpt-5.6-luna")
+CODEX_REASONING_EFFORT = os.environ.get("STORY_AGENT_CODEX_REASONING_EFFORT", "medium")
 SECRETS_PATH = pathlib.Path.home() / ".config" / "secrets" / "codex.env"
 TASK_NAME = os.environ.get("STORY_AGENT_TASK_NAME") or re.sub(
     r"[^a-z0-9-]+",
@@ -30,8 +32,9 @@ TASK_NAME = os.environ.get("STORY_AGENT_TASK_NAME") or re.sub(
 ).strip("-")
 TASK_EXPIRE = "5m"
 MAX_RUNTIME_SECONDS = 50 * 60
-MAX_CAPTURE_CHARS = 2 * 1024 * 1024
-MAX_LOG_EVENTS = 1900
+MAX_CAPTURE_CHARS = 256 * 1024
+MAX_LOG_EVENTS = 200
+MAX_LOG_MESSAGE_CHARS = 2000
 MAX_LINE_BUFFER_CHARS = 16 * 1024
 # Cloudflare's Browser Integrity Check rejects the default "Python-urllib/x.y"
 # User-Agent with Error 1010 (browser_signature_banned), which silently blocks
@@ -243,6 +246,12 @@ def strip_terminal(text):
     return ANSI_RE.sub("", text).replace("\r", "")
 
 
+def truncate_log_message(message):
+    if len(message) <= MAX_LOG_MESSAGE_CHARS:
+        return message
+    return message[: MAX_LOG_MESSAGE_CHARS - 15] + "... [truncated]"
+
+
 def poll_messages(proc, input_fd):
     last_id = 0
     while proc.poll() is None:
@@ -350,6 +359,10 @@ def main():
             WORKDIR,
             "--color",
             "never",
+            "--model",
+            CODEX_MODEL,
+            "--config",
+            "model_reasoning_effort=" + json.dumps(CODEX_REASONING_EFFORT),
             "--output-last-message",
             str(result_path),
         ]
@@ -371,12 +384,11 @@ def main():
         thread = threading.Thread(target=poll_messages, args=(proc, master_fd), daemon=True)
         thread.start()
 
-        output_parts = []
+        captured_output = ""
         line_buffer = ""
         result = None
         started_at = time.monotonic()
         timed_out = False
-        captured_chars = 0
         logged_events = 0
         log_limit_reported = False
         last_output_at = time.time()
@@ -404,16 +416,13 @@ def main():
                 break
             text = chunk.decode("utf-8", errors="replace")
             last_output_at = time.time()
-            if captured_chars < MAX_CAPTURE_CHARS:
-                captured = text[: MAX_CAPTURE_CHARS - captured_chars]
-                output_parts.append(captured)
-                captured_chars += len(captured)
+            captured_output = (captured_output + text)[-MAX_CAPTURE_CHARS:]
             line_buffer = (line_buffer + text)[-MAX_LINE_BUFFER_CHARS:]
             while "\n" in line_buffer:
                 line, line_buffer = line_buffer.split("\n", 1)
                 clean = strip_terminal(line).rstrip()
                 if clean and logged_events < MAX_LOG_EVENTS:
-                    post_event("log", clean)
+                    post_event("log", truncate_log_message(clean))
                     logged_events += 1
                 elif clean and not log_limit_reported:
                     post_event("warning", "Further Codex log lines were suppressed after the output quota was reached.")
@@ -421,8 +430,12 @@ def main():
 
         if line_buffer:
             clean = strip_terminal(line_buffer).rstrip()
-            if clean:
-                post_event("log", clean)
+            if clean and logged_events < MAX_LOG_EVENTS:
+                post_event("log", truncate_log_message(clean))
+                logged_events += 1
+            elif clean and not log_limit_reported:
+                post_event("warning", "Further Codex log lines were suppressed after the output quota was reached.")
+                log_limit_reported = True
 
         exit_code = proc.wait()
         os.close(master_fd)
@@ -433,13 +446,14 @@ def main():
 
         if result_path.exists():
             try:
-                with result_path.open("r", encoding="utf-8") as final_file:
-                    final_message = final_file.read(MAX_CAPTURE_CHARS + 1)
-                if len(final_message) > MAX_CAPTURE_CHARS:
-                    final_message = final_message[:MAX_CAPTURE_CHARS]
+                with result_path.open("rb") as final_file:
+                    final_file.seek(0, os.SEEK_END)
+                    final_size = final_file.tell()
+                    final_file.seek(max(0, final_size - MAX_CAPTURE_CHARS))
+                    final_message = final_file.read(MAX_CAPTURE_CHARS).decode("utf-8", errors="replace")
+                if final_size > MAX_CAPTURE_CHARS:
                     post_event("warning", "Codex final output was truncated at the output quota.")
                 if final_message:
-                    output_parts.append("\n" + final_message)
                     result = parse_result(final_message)
             except Exception as exc:
                 post_event("warning", "Could not read Codex final message: " + str(exc))
@@ -450,7 +464,7 @@ def main():
             return exit_code
 
         if not result:
-            result = parse_result("".join(output_parts))
+            result = parse_result(captured_output)
 
         if result and result.get("story_id"):
             post_event("complete", "Story created.", result)

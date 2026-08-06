@@ -42,7 +42,9 @@
                "OAUTH_CALLBACK_URL": "https://bedtimestories.bruce-hart.workers.dev/oauth/callback",
                "PUBLIC_VIEW": "true",
 			   "CACHE_REFRESH_DAYS": "5",
-			   "STORY_AGENT_CODEX_HOME": "/home/sprite/.codex-bedtimestories"
+			   "STORY_AGENT_CODEX_HOME": "/home/sprite/.codex-bedtimestories",
+			   "STORY_AGENT_CODEX_MODEL": "gpt-5.6-luna",
+			   "STORY_AGENT_CODEX_REASONING_EFFORT": "medium"
        },
 	/**
 	 * Note: Use secrets to store sensitive data.
