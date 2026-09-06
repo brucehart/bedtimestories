@@ -6,7 +6,7 @@ const DEFAULT_SPRITES_API_BASE = 'https://api.sprites.dev';
 const DEFAULT_SPRITE_NAME = 'bedtime-stories';
 const DEFAULT_SPRITE_WORKDIR = '/home/sprite/bedtimestories/main';
 const DEFAULT_CODEX_HOME = '/home/sprite/.codex-bedtimestories';
-const DEFAULT_CODEX_MODEL = 'gpt-5.6-luna';
+const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol';
 const DEFAULT_CODEX_REASONING_EFFORT = 'medium';
 
 // Cloudflare's Browser Integrity Check blocks the default curl/urllib

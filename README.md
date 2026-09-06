@@ -145,7 +145,7 @@ Optional vars:
 - `STORY_AGENT_SPRITE_WORKDIR` – defaults to `/home/sprite/bedtimestories/main`.
 - `STORY_AGENT_SPRITES_API_BASE` – defaults to `https://api.sprites.dev`.
 - `STORY_AGENT_CODEX_HOME` – defaults to `/home/sprite/.codex-bedtimestories`.
-- `STORY_AGENT_CODEX_MODEL` – defaults to `gpt-5.6-luna`.
+- `STORY_AGENT_CODEX_MODEL` – defaults to `gpt-5.6-sol`.
 - `STORY_AGENT_CODEX_REASONING_EFFORT` – defaults to `medium`.
 - `STORY_API_USER_AGENT` – browser-like user agent used by Sprite-side story API calls; override only if Cloudflare Browser Integrity Check starts blocking the default.
 

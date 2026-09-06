@@ -132,6 +132,8 @@ Reference details:
 - Grandpa Bruce: bald, clean shaven.
 - Grandpa Rick: bald, clean shaven, glasses.
 - Trixie: small tuxedo cat with short legs, white paws, black chin, black face, white chest.
+- Jackpot: Grandma's round orange tabby cat with short, stumpy legs.
+- Berlioz: Granny's dark gray, heavy-set cat with a long tail.
 
 ## Media rules
 

@@ -1,0 +1,127 @@
+sprite - Sprite Environment CLI
+
+Usage:
+  sprite [flags] <command> [arguments]
+
+Commands:
+  login                      Authenticate with Fly.io (simplified flow)
+  logout                     Remove Sprites configuration
+  exec (x)                   Execute a command in the sprite environment
+  console (c)                Open an interactive shell in the sprite environment
+  create <name>              Create a new sprite
+  file                       Manage files in sprites
+  use [sprite]               Activate a sprite for the current directory
+  list (ls)                  List all sprites
+  checkpoint [subcommand]    Manage checkpoints (aliases: checkpoints)
+    create                   Create a new checkpoint
+    list (ls)                List all checkpoints
+    info <id>                Show information about a specific checkpoint
+  restore <id>               Restore from a checkpoint
+  destroy [sprite-name]      Destroy a sprite
+
+  proxy <port1> [port2...]   Forward local ports through the remote server proxy
+  api [flags] <path>         Make authenticated API calls with curl
+  url                        Show sprite URL
+  url update --auth <type>   Update URL authentication settings
+  upgrade                    Upgrade the sprite client to the latest version
+  completion <shell>         Generate shell completion scripts
+
+Organization Commands:
+  org auth                   Add an API token (aliases: orgs, organizations, organization, o)
+  org list (ls)              Show configured tokens
+  org logout                 Remove all tokens
+
+Authentication Commands:
+  auth setup --token <token> Set up authentication from a token
+
+Global Flags:
+  --debug[=<file>]           Enable debug logging (logs to stdout if no file specified)
+  -h, --help                 Show this help message
+
+Examples:
+  # Authenticate with Fly.io
+  sprite login
+  sprite login -o my-org
+
+  # Logout (removes Sprites config)
+  sprite logout
+
+  # Or use the full org auth flow
+  sprite org auth
+  sprite orgs auth
+  sprite o auth
+
+  # Set up auth from a token (no browser needed)
+  sprite auth setup --token "my-org/abc123/token-id/token-value"
+
+  # Create a new sprite
+  sprite create my-sprite
+  sprite create -o myorg dev-sprite
+  sprite -o myorg create dev-sprite
+
+  # List all sprites
+  sprite list
+  sprite ls
+  sprite list -o myorg
+  sprite -o myorg list
+
+  # Activate a sprite for the current directory
+  sprite use my-sprite
+  sprite use -o myorg dev-sprite
+  sprite -o myorg -s dev-sprite use
+  sprite use --unset
+
+  # Execute a command
+  sprite exec ls -la
+  sprite x ls -la
+  sprite exec -o myorg -s mysprite npm start
+  sprite -o myorg -s mysprite exec npm start
+
+  # Open an interactive shell
+  sprite console
+  sprite c
+  sprite console -o myorg -s mysprite
+  sprite -o myorg -s mysprite console
+
+  # Execute with debug logging
+  sprite --debug exec npm start              # logs to stdout
+  sprite --debug=/tmp/debug.log exec npm start  # logs to file
+  sprite exec --debug npm start              # same as above
+  sprite -s mysprite --debug exec npm start  # debug from any position
+
+  # Create a checkpoint
+  sprite checkpoint create
+
+  # List checkpoints
+  sprite checkpoint list
+  sprite checkpoint ls
+
+  # Restore from checkpoint
+  sprite restore my-checkpoint-id
+
+  # Destroy a sprite
+  sprite destroy mysprite
+  sprite destroy -o myorg mysprite
+
+
+
+  # Forward local ports 8080 and 3000
+  sprite proxy 8080 3000
+
+  # Show sprite URL
+  sprite url
+
+  # Make sprite URL public
+  sprite url update --auth public
+
+  # Upgrade to the latest version
+  sprite upgrade
+
+  # Check for updates without installing
+  sprite upgrade --check
+
+Use 'sprite <command> --help' for command-specific options.
+
+Environment Variables:
+  SPRITE_VERSION_DEBUG=true    Show detailed version check information
+  UPGRADE_CHECK=true           Force version check (bypass 24-hour cache)
